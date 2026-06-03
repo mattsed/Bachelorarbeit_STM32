@@ -136,7 +136,7 @@ int main(void)
 	  /* USER CODE BEGIN WHILE */
 
 	  HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_0);
-	  HAL_Delay(100);
+	  HAL_Delay(40);
 
 	  /* USER CODE END WHILE */
 

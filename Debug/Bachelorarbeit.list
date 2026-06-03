@@ -498,8 +498,8 @@ int main(void)
  800067c:	2101      	movs	r1, #1
  800067e:	4805      	ldr	r0, [pc, #20]	@ (8000694 <main+0x88>)
  8000680:	f002 fd1c 	bl	80030bc <HAL_GPIO_TogglePin>
-	  HAL_Delay(100);
- 8000684:	2064      	movs	r0, #100	@ 0x64
+	  HAL_Delay(40);
+ 8000684:	2028      	movs	r0, #40	@ 0x28
  8000686:	f001 fa21 	bl	8001acc <HAL_Delay>
 	  HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_0);
  800068a:	bf00      	nop
