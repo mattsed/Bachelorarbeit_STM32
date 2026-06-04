@@ -21,7 +21,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "app/app.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -106,7 +106,10 @@ int main(void)
   MX_SPI3_Init();
   MX_SPI5_Init();
   /* USER CODE BEGIN 2 */
-
+  if (app_init() != APP_STATUS_OK)
+  {
+    Error_Handler();
+  }
   /* USER CODE END 2 */
 
   /* Initialize leds */
@@ -132,17 +135,8 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-
-	  /* USER CODE BEGIN WHILE */
-
-	  HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_0);
-	  HAL_Delay(40);
-
-	  /* USER CODE END WHILE */
-
-	  /* USER CODE BEGIN 3 *//* USER CODE END WHILE */
-
     /* USER CODE BEGIN 3 */
+    app_run();
   }
   /* USER CODE END 3 */
 }
