@@ -5,6 +5,11 @@
 extern "C" {
 #endif
 
+/* Gemeinsame Rueckmeldung fuer alle Projektmodule.
+ * Dadurch kann die app-Schicht einheitlich bewerten, ob eine Aktion
+ * erfolgreich war, noch nicht bereit ist, fehlgeschlagen ist oder zu lange
+ * gedauert hat.
+ */
 typedef enum
 {
   APP_STATUS_OK = 0,

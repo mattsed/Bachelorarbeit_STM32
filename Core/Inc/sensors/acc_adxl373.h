@@ -9,8 +9,13 @@
 extern "C" {
 #endif
 
+/* Initialisiert den ADXL373 400g-Beschleunigungssensor auf SPI3. */
 app_status_t acc_adxl373_init(void);
+
+/* Liest die 400g-Beschleunigungsrohdaten des ADXL373. */
 app_status_t acc_adxl373_read(acc_400g_data_t *data);
+
+/* Meldet, ob der ADXL373 erkannt und konfiguriert ist. */
 bool acc_adxl373_is_ready(void);
 
 #ifdef __cplusplus

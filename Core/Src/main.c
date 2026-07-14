@@ -105,12 +105,6 @@ int main(void)
   MX_SPI1_Init();
   MX_SPI3_Init();
   MX_SPI5_Init();
-  /* USER CODE BEGIN 2 */
-  if (app_init() != APP_STATUS_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE END 2 */
 
   /* Initialize leds */
   BSP_LED_Init(LED_GREEN);
@@ -120,7 +114,9 @@ int main(void)
   /* Initialize USER push-button, will be used to trigger an interrupt each time it's pressed.*/
   BSP_PB_Init(BUTTON_USER, BUTTON_MODE_EXTI);
 
-  /* Initialize COM1 port (115200, 8 bits (7-bit data + 1 stop bit), no parity */
+  /* Initialize COM1 port (115200, 8 bits (7-bit data + 1 stop bit), no parity.
+   * Muss vor app_init() stehen, da die Sensor-Init-Tests bereits per printf
+   * ueber diesen Port (ST-Link VCP) Debug-Ausgaben schreiben. */
   BspCOMInit.BaudRate   = 115200;
   BspCOMInit.WordLength = COM_WORDLENGTH_8B;
   BspCOMInit.StopBits   = COM_STOPBITS_1;
@@ -130,6 +126,13 @@ int main(void)
   {
     Error_Handler();
   }
+
+  /* USER CODE BEGIN 2 */
+  if (app_init() != APP_STATUS_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
@@ -607,6 +610,9 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+
+/* printf/stdout wird bereits von Drivers/BSP/.../stm32h5xx_nucleo.c
+ * (__io_putchar, USE_COM_LOG) ueber den ST-Link VCP (COM1) umgeleitet. */
 
 /* USER CODE END 4 */
 

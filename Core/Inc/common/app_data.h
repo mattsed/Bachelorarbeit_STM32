@@ -8,6 +8,10 @@
 extern "C" {
 #endif
 
+/* GNSS-Daten eines Messzeitpunkts.
+ * latitude_e7 und longitude_e7 speichern Grad * 10^7, damit Koordinaten ohne
+ * float-Rundungsfehler als Integer abgelegt werden koennen.
+ */
 typedef struct
 {
   bool fix_valid;
@@ -17,6 +21,10 @@ typedef struct
   uint32_t utc_time_ms;
 } gnss_data_t;
 
+/* Bremsdruckdaten.
+ * raw-Werte kommen direkt aus dem ADC. Die bar-Werte werden spaeter nach
+ * Kalibrierung des Bosch PSS-140 daraus berechnet.
+ */
 typedef struct
 {
   uint16_t front_raw;
@@ -25,6 +33,7 @@ typedef struct
   float back_bar;
 } brake_pressure_data_t;
 
+/* Rohdaten der LSM6DSO-IMU: Beschleunigung und Drehrate. */
 typedef struct
 {
   int16_t accel_x_raw;
@@ -35,6 +44,7 @@ typedef struct
   int16_t gyro_z_raw;
 } imu_data_t;
 
+/* Rohdaten des ADXL373 fuer hohe Beschleunigungen bis 400g. */
 typedef struct
 {
   int16_t accel_x_raw;
@@ -42,6 +52,10 @@ typedef struct
   int16_t accel_z_raw;
 } acc_400g_data_t;
 
+/* Ein kompletter Messdatensatz.
+ * Dieser Typ ist die gemeinsame Uebergabe zwischen Sensoren, microSD-Logger
+ * und BLE-Versand. Alles, was zeitlich zusammengehoert, landet hier.
+ */
 typedef struct
 {
   uint32_t timestamp_ms;

@@ -10,6 +10,9 @@
 
 app_status_t app_init(void)
 {
+  /* Projektmodule vorbereiten. Die echte Treiberinitialisierung wird spaeter
+   * in den jeweiligen Modulen ergaenzt.
+   */
   (void)board_init();
   (void)gnss_init();
   (void)brake_pressure_init();
@@ -23,6 +26,10 @@ app_status_t app_init(void)
 
 void app_run(void)
 {
+  /* Hintergrundaufgaben, die regelmaessig laufen muessen.
+   * Spaeter wird hier auch der eigentliche Messzyklus aufgebaut:
+   * Sensoren lesen, app_sample_t fuellen, auf microSD speichern, per BLE senden.
+   */
   (void)gnss_poll();
   (void)ble_bluenrg_poll();
 }
