@@ -23,7 +23,9 @@ static void acc_adxl373_cs(const board_interfaces_t *board, GPIO_PinState state)
 /* Liest ein einzelnes ADXL373-Register per SPI. */
 static app_status_t acc_adxl373_read_reg(const board_interfaces_t *board, uint8_t reg, uint8_t *value)
 {
-  uint8_t tx[2] = { ADXL373_SPI_READ(reg), 0x00u };
+  /* Dummy-Byte 0xA5 statt 0x00: erlaubt einen MISO-MOSI-Loopback-Test
+   * (der Sensor ignoriert das Byte waehrend der Lesephase ohnehin). */
+  uint8_t tx[2] = { ADXL373_SPI_READ(reg), 0xA5u };
   uint8_t rx[2] = { 0 };
 
   acc_adxl373_cs(board, GPIO_PIN_RESET);

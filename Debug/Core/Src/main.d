@@ -32,7 +32,8 @@ Core/Src/main.o: ../Core/Src/main.c ../Core/Inc/main.h \
  ../Drivers/STM32H5xx_HAL_Driver/Inc/stm32h5xx_hal_exti.h \
  ../Drivers/BSP/STM32H5xx_Nucleo/stm32h5xx_nucleo.h \
  ../Core/Inc/stm32h5xx_nucleo_conf.h \
- ../Drivers/BSP/STM32H5xx_Nucleo/stm32h5xx_nucleo_errno.h
+ ../Drivers/BSP/STM32H5xx_Nucleo/stm32h5xx_nucleo_errno.h \
+ ../Core/Inc/app/app.h ../Core/Inc/common/app_status.h
 ../Core/Inc/main.h:
 ../Drivers/STM32H5xx_HAL_Driver/Inc/stm32h5xx_hal.h:
 ../Core/Inc/stm32h5xx_hal_conf.h:
@@ -68,3 +69,5 @@ Core/Src/main.o: ../Core/Src/main.c ../Core/Inc/main.h \
 ../Drivers/BSP/STM32H5xx_Nucleo/stm32h5xx_nucleo.h:
 ../Core/Inc/stm32h5xx_nucleo_conf.h:
 ../Drivers/BSP/STM32H5xx_Nucleo/stm32h5xx_nucleo_errno.h:
+../Core/Inc/app/app.h:
+../Core/Inc/common/app_status.h:
