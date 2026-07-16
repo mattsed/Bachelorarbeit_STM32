@@ -171,7 +171,12 @@ void HAL_UART_MspInit(UART_HandleTypeDef* huart)
   /** Initializes the peripherals clock
   */
     PeriphClkInitStruct.PeriphClockSelection = RCC_PERIPHCLK_LPUART1;
-    PeriphClkInitStruct.Lpuart1ClockSelection = RCC_LPUART1CLKSOURCE_PCLK3;
+    /* Abweichend von CubeMX: CSI (4 MHz) statt PCLK3 (250 MHz), sonst sind
+     * die 9600 Baud des GNSS-Moduls nicht erreichbar (LPUART-Teilergrenze).
+     * ACHTUNG: Bei Neugenerierung aus der .ioc wird diese Zeile auf PCLK3
+     * zurueckgesetzt -- dann hier wieder auf CSI aendern (oder in CubeMX
+     * die LPUART1-Clock-Mux-Einstellung auf CSI stellen). */
+    PeriphClkInitStruct.Lpuart1ClockSelection = RCC_LPUART1CLKSOURCE_CSI;
     if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInitStruct) != HAL_OK)
     {
       Error_Handler();

@@ -95,7 +95,20 @@ int main(void)
   SystemClock_Config();
 
   /* USER CODE BEGIN SysInit */
-
+  /* CSI-Oszillator (4 MHz) einschalten, bevor die Peripherie initialisiert
+   * wird: LPUART1 (GNSS) und zeitweise SPI5 (microSD-Init) nutzen ihn als
+   * langsame Taktquelle, weil PCLK3 (250 MHz) dafuer zu schnell ist. */
+  {
+    RCC_OscInitTypeDef csi_osc = { 0 };
+    csi_osc.OscillatorType = RCC_OSCILLATORTYPE_CSI;
+    csi_osc.CSIState = RCC_CSI_ON;
+    csi_osc.CSICalibrationValue = RCC_CSICALIBRATION_DEFAULT;
+    csi_osc.PLL.PLLState = RCC_PLL_NONE;
+    if (HAL_RCC_OscConfig(&csi_osc) != HAL_OK)
+    {
+      Error_Handler();
+    }
+  }
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
