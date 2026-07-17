@@ -11,6 +11,7 @@
 "./Core/Src/sensors/brake_pressure.o"
 "./Core/Src/sensors/gnss.o"
 "./Core/Src/sensors/imu_lsm6dso.o"
+"./Core/Src/storage/ff.o"
 "./Core/Src/storage/storage_logger.o"
 "./Core/Startup/startup_stm32h563zitx.o"
 "./Drivers/BSP/STM32H5xx_Nucleo/stm32h5xx_nucleo.o"

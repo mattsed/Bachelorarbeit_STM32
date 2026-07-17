@@ -15,7 +15,9 @@
 #define GNSS_I2C_ADDR           0x3Au
 #define GNSS_SCL_PIN            GPIO_PIN_8
 #define GNSS_SDA_PIN            GPIO_PIN_9
-#define GNSS_COLLECT_TIMEOUT_MS 3000u
+/* Grosszuegig bemessen: nach einem Board-Reset bootet auch der Teseo neu
+ * (Reset-Netz der Shields) und braucht 1..2 s, bis NMEA wieder laeuft. */
+#define GNSS_COLLECT_TIMEOUT_MS 6000u
 #define GNSS_BUF_LEN            512u
 
 /* Wird true, sobald der GNSS-Treiber initialisiert ist und verwertbare Daten
@@ -197,7 +199,7 @@ app_status_t gnss_init(void)
 
   /* NMEA-Strom einsammeln (das Modul sendet im Sekundentakt). */
   uint32_t start = HAL_GetTick();
-  while ((HAL_GetTick() - start) < GNSS_COLLECT_TIMEOUT_MS && len < GNSS_BUF_LEN)
+  while ((HAL_GetTick() - start) < GNSS_COLLECT_TIMEOUT_MS)
   {
     len += gnss_i2c_read_chunk(&buf[len], GNSS_BUF_LEN - len);
     for (uint32_t i = 1; i < len; ++i)
@@ -210,6 +212,12 @@ app_status_t gnss_init(void)
     if (has_nmea && len > 80u)
     {
       break;
+    }
+    /* Puffer voll, aber kein NMEA darin (z. B. Boot-Muell direkt nach einem
+     * Modul-Reset): verwerfen und weiter sammeln. */
+    if (len >= GNSS_BUF_LEN && !has_nmea)
+    {
+      len = 0;
     }
   }
 

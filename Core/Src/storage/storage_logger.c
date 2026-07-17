@@ -1,27 +1,36 @@
 #include "storage/storage_logger.h"
 
 #include <stdio.h>
+#include <string.h>
 
 #include "board/board.h"
 
-/* SD-Karten-Kommandos (SPI-Modus, vgl. SD Physical Layer Spec). */
+#include "ff.h"
+#include "diskio.h"
+
+/* ==========================================================================
+ * SD-Karten-Low-Level (SPI-Modus, vgl. SD Physical Layer Spec).
+ * Verifiziert am 16.07.2026 (Init + Sektor-0-Lesetest), am 17.07.2026 um
+ * CMD24-Schreiben erweitert. Dient als diskio-Backend fuer FatFS.
+ * ========================================================================== */
+
 #define SD_CMD0_GO_IDLE          0u
 #define SD_CMD8_SEND_IF_COND     8u
 #define SD_CMD17_READ_SINGLE     17u
+#define SD_CMD24_WRITE_SINGLE    24u
 #define SD_CMD55_APP_CMD         55u
 #define SD_CMD58_READ_OCR        58u
 #define SD_ACMD41_SD_SEND_OP     41u
 
-/* R1-Antwortbits. */
 #define SD_R1_IDLE               0x01u
 #define SD_R1_ILLEGAL_CMD        0x04u
 
 #define SD_BLOCK_SIZE            512u
 #define SD_ACMD41_TIMEOUT_MS     1000u
 #define SD_TOKEN_TIMEOUT_MS      200u
+#define SD_WRITE_TIMEOUT_MS      500u
 #define SD_DATA_TOKEN            0xFEu
 
-/* Erkannter Kartentyp, nur fuer Diagnoseausgaben. */
 typedef enum
 {
   SD_CARD_NONE = 0,
@@ -30,15 +39,13 @@ typedef enum
   SD_CARD_V2_HC,
 } sd_card_type_t;
 
-/* Wird true, sobald microSD/FatFS initialisiert ist und geschrieben werden kann. */
-static bool storage_logger_ready = false;
+static sd_card_type_t sd_card_type = SD_CARD_NONE;
 
 static void sd_cs(const board_interfaces_t *board, GPIO_PinState state)
 {
   HAL_GPIO_WritePin(board->microsd_cs.port, board->microsd_cs.pin, state);
 }
 
-/* Tauscht genau ein Byte auf SPI5 aus (0xFF senden = Bus idle halten). */
 static uint8_t sd_xfer(const board_interfaces_t *board, uint8_t out)
 {
   uint8_t in = 0xFFu;
@@ -75,9 +82,7 @@ static app_status_t sd_spi_config(const board_interfaces_t *board, uint32_t clk_
   return APP_STATUS_OK;
 }
 
-/* Sendet ein Kommando und liefert die R1-Antwort. CS bleibt danach LOW,
- * damit der Aufrufer weitere Antwortbytes (R3/R7, Datenbloecke) lesen kann;
- * sd_release() beendet die Transaktion. */
+/* Sendet ein Kommando und liefert die R1-Antwort. CS bleibt danach LOW. */
 static uint8_t sd_command(const board_interfaces_t *board, uint8_t cmd, uint32_t arg, uint8_t crc)
 {
   uint8_t r1 = 0xFFu;
@@ -92,7 +97,6 @@ static uint8_t sd_command(const board_interfaces_t *board, uint8_t cmd, uint32_t
   (void)sd_xfer(board, (uint8_t)arg);
   (void)sd_xfer(board, crc);
 
-  /* Karte antwortet nach 0..8 Idle-Bytes; R1 hat Bit 7 = 0. */
   for (int i = 0; i < 10; ++i)
   {
     r1 = sd_xfer(board, 0xFFu);
@@ -105,18 +109,23 @@ static uint8_t sd_command(const board_interfaces_t *board, uint8_t cmd, uint32_t
   return r1;
 }
 
-/* Beendet eine Kommandosequenz: CS anheben und der Karte 8 Takte geben,
- * damit sie die Datenleitung wieder freigibt. */
 static void sd_release(const board_interfaces_t *board)
 {
   sd_cs(board, GPIO_PIN_SET);
   (void)sd_xfer(board, 0xFFu);
 }
 
-/* Liest einen einzelnen 512-Byte-Block (CMD17) zur Verifikation des Datenpfads. */
-static app_status_t sd_read_block(const board_interfaces_t *board, uint32_t addr, uint8_t *buf)
+/* Wandelt eine Sektornummer in das Adressformat der Karte um:
+ * SDHC/SDXC adressiert in Bloecken, aeltere Karten in Bytes. */
+static uint32_t sd_sector_to_addr(uint32_t sector)
 {
-  uint8_t r1 = sd_command(board, SD_CMD17_READ_SINGLE, addr, 0xFFu);
+  return (sd_card_type == SD_CARD_V2_HC) ? sector : sector * SD_BLOCK_SIZE;
+}
+
+/* Liest einen einzelnen 512-Byte-Block (CMD17). */
+static app_status_t sd_read_block(const board_interfaces_t *board, uint32_t sector, uint8_t *buf)
+{
+  uint8_t r1 = sd_command(board, SD_CMD17_READ_SINGLE, sd_sector_to_addr(sector), 0xFFu);
 
   if (r1 != 0x00u)
   {
@@ -124,7 +133,6 @@ static app_status_t sd_read_block(const board_interfaces_t *board, uint32_t addr
     return APP_STATUS_ERROR;
   }
 
-  /* Auf das Datentoken 0xFE warten. */
   uint32_t start = HAL_GetTick();
   uint8_t token = 0xFFu;
   while ((token = sd_xfer(board, 0xFFu)) == 0xFFu)
@@ -152,42 +160,68 @@ static app_status_t sd_read_block(const board_interfaces_t *board, uint32_t addr
   return APP_STATUS_OK;
 }
 
-app_status_t storage_logger_init(void)
+/* Schreibt einen einzelnen 512-Byte-Block (CMD24) und wartet das interne
+ * Programmieren der Karte ab (Busy = Karte haelt die Datenleitung low). */
+static app_status_t sd_write_block(const board_interfaces_t *board, uint32_t sector, const uint8_t *buf)
 {
-  const board_interfaces_t *board = board_get_interfaces();
-  sd_card_type_t card_type = SD_CARD_NONE;
-  uint8_t r1;
+  uint8_t r1 = sd_command(board, SD_CMD24_WRITE_SINGLE, sd_sector_to_addr(sector), 0xFFu);
 
-  storage_logger_ready = false;
-
-  /* CSI-Oszillator (4 MHz) einschalten; er dient nur als langsame
-   * SPI5-Taktquelle waehrend der Karteninitialisierung. */
-  RCC_OscInitTypeDef osc = { 0 };
-  osc.OscillatorType = RCC_OSCILLATORTYPE_CSI;
-  osc.CSIState = RCC_CSI_ON;
-  osc.CSICalibrationValue = RCC_CSICALIBRATION_DEFAULT;
-  osc.PLL.PLLState = RCC_PLL_NONE;
-  if (HAL_RCC_OscConfig(&osc) != HAL_OK)
+  if (r1 != 0x00u)
   {
-    printf("[microSD] CSI-Oszillator liess sich nicht aktivieren.\r\n");
+    sd_release(board);
     return APP_STATUS_ERROR;
   }
 
-  /* Init-Phase: 4 MHz (CSI) / 16 = 250 kHz. */
+  (void)sd_xfer(board, 0xFFu);          /* Luecke vor dem Datenpaket */
+  (void)sd_xfer(board, SD_DATA_TOKEN);  /* Starttoken */
+  for (uint32_t i = 0; i < SD_BLOCK_SIZE; ++i)
+  {
+    (void)sd_xfer(board, buf[i]);
+  }
+  (void)sd_xfer(board, 0xFFu);          /* Dummy-CRC */
+  (void)sd_xfer(board, 0xFFu);
+
+  uint8_t resp = sd_xfer(board, 0xFFu); /* Data Response Token */
+  if ((resp & 0x1Fu) != 0x05u)          /* 0x05 = Daten angenommen */
+  {
+    sd_release(board);
+    return APP_STATUS_ERROR;
+  }
+
+  uint32_t start = HAL_GetTick();
+  while (sd_xfer(board, 0xFFu) != 0xFFu)
+  {
+    if ((HAL_GetTick() - start) > SD_WRITE_TIMEOUT_MS)
+    {
+      sd_release(board);
+      return APP_STATUS_ERROR;
+    }
+  }
+
+  sd_release(board);
+  return APP_STATUS_OK;
+}
+
+/* Karteninitialisierung nach SD-Spezifikation (CMD0/CMD8/ACMD41/CMD58). */
+static app_status_t sd_hw_init(const board_interfaces_t *board)
+{
+  uint8_t r1;
+
+  sd_card_type = SD_CARD_NONE;
+
   if (sd_spi_config(board, RCC_SPI5CLKSOURCE_CSI, SPI_BAUDRATEPRESCALER_16) != APP_STATUS_OK)
   {
     printf("[microSD] SPI5-Konfiguration fehlgeschlagen.\r\n");
     return APP_STATUS_ERROR;
   }
 
-  /* Mindestens 74 Takte mit CS high, damit die Karte in den SPI-Modus wechseln kann. */
+  /* Mindestens 74 Takte mit CS high fuer den Wechsel in den SPI-Modus. */
   sd_cs(board, GPIO_PIN_SET);
   for (int i = 0; i < 10; ++i)
   {
     (void)sd_xfer(board, 0xFFu);
   }
 
-  /* CMD0: Karte in den Idle-Zustand (SPI-Modus) versetzen. */
   r1 = 0xFFu;
   for (int attempt = 0; attempt < 5 && r1 != SD_R1_IDLE; ++attempt)
   {
@@ -200,7 +234,7 @@ app_status_t storage_logger_init(void)
     return APP_STATUS_ERROR;
   }
 
-  /* CMD8: unterscheidet SD-Version 2 (antwortet mit Echo) von Version 1. */
+  sd_card_type_t type;
   r1 = sd_command(board, SD_CMD8_SEND_IF_COND, 0x000001AAu, 0x87u);
   if (r1 == SD_R1_IDLE)
   {
@@ -212,10 +246,10 @@ app_status_t storage_logger_init(void)
     sd_release(board);
     if (r7[2] != 0x01u || r7[3] != 0xAAu)
     {
-      printf("[microSD] CMD8-Echo ungueltig (%02X %02X %02X %02X).\r\n", r7[0], r7[1], r7[2], r7[3]);
+      printf("[microSD] CMD8-Echo ungueltig.\r\n");
       return APP_STATUS_ERROR;
     }
-    card_type = SD_CARD_V2_SC;
+    type = SD_CARD_V2_SC;
   }
   else
   {
@@ -225,12 +259,11 @@ app_status_t storage_logger_init(void)
       printf("[microSD] CMD8 fehlgeschlagen (0x%02X).\r\n", r1);
       return APP_STATUS_ERROR;
     }
-    card_type = SD_CARD_V1;
+    type = SD_CARD_V1;
   }
 
-  /* ACMD41 wiederholen, bis die Karte die Initialisierung abgeschlossen hat. */
   uint32_t start = HAL_GetTick();
-  uint32_t acmd41_arg = (card_type == SD_CARD_V1) ? 0u : 0x40000000u; /* HCS-Bit */
+  uint32_t acmd41_arg = (type == SD_CARD_V1) ? 0u : 0x40000000u;
   do
   {
     r1 = sd_command(board, SD_CMD55_APP_CMD, 0u, 0xFFu);
@@ -248,12 +281,11 @@ app_status_t storage_logger_init(void)
   } while (r1 != 0x00u);
   if (r1 != 0x00u)
   {
-    printf("[microSD] Initialisierung nicht abgeschlossen (ACMD41-Antwort 0x%02X).\r\n", r1);
+    printf("[microSD] Initialisierung nicht abgeschlossen (0x%02X).\r\n", r1);
     return APP_STATUS_ERROR;
   }
 
-  /* CMD58: OCR lesen, CCS-Bit unterscheidet SDHC (Blockadressierung) von SDSC. */
-  if (card_type != SD_CARD_V1)
+  if (type != SD_CARD_V1)
   {
     r1 = sd_command(board, SD_CMD58_READ_OCR, 0u, 0xFFu);
     if (r1 == 0x00u)
@@ -265,33 +297,163 @@ app_status_t storage_logger_init(void)
       }
       if ((ocr[0] & 0x40u) != 0u)
       {
-        card_type = SD_CARD_V2_HC;
+        type = SD_CARD_V2_HC;
       }
     }
     sd_release(board);
   }
 
-  /* Datenbetrieb: PCLK3 (250 MHz) / 64 = 3,9 MHz. */
   if (sd_spi_config(board, RCC_SPI5CLKSOURCE_PCLK3, SPI_BAUDRATEPRESCALER_64) != APP_STATUS_OK)
   {
     printf("[microSD] Umschalten auf Datentakt fehlgeschlagen.\r\n");
     return APP_STATUS_ERROR;
   }
 
-  const char *type_name = (card_type == SD_CARD_V2_HC) ? "SDHC/SDXC"
-                        : (card_type == SD_CARD_V2_SC) ? "SDSC v2"
-                                                       : "SD v1";
-  printf("[microSD] Karte initialisiert (%s).\r\n", type_name);
+  sd_card_type = type;
+  printf("[microSD] Karte initialisiert (%s).\r\n",
+         (type == SD_CARD_V2_HC) ? "SDHC/SDXC" : (type == SD_CARD_V2_SC) ? "SDSC v2" : "SD v1");
+  return APP_STATUS_OK;
+}
 
-  /* Lesetest: Sektor 0 (Boot-Sektor/MBR endet mit der Signatur 0x55 0xAA). */
-  static uint8_t block[SD_BLOCK_SIZE];
-  if (sd_read_block(board, 0u, block) != APP_STATUS_OK)
+/* ==========================================================================
+ * diskio-Backend fuer FatFS (ein Laufwerk, Laufwerksnummer 0).
+ * ========================================================================== */
+
+DSTATUS disk_status(BYTE pdrv)
+{
+  if (pdrv != 0u || sd_card_type == SD_CARD_NONE)
   {
-    printf("[microSD] Lesetest von Sektor 0 fehlgeschlagen.\r\n");
+    return STA_NOINIT;
+  }
+  return 0;
+}
+
+DSTATUS disk_initialize(BYTE pdrv)
+{
+  if (pdrv != 0u)
+  {
+    return STA_NOINIT;
+  }
+  if (sd_card_type == SD_CARD_NONE)
+  {
+    if (sd_hw_init(board_get_interfaces()) != APP_STATUS_OK)
+    {
+      return STA_NOINIT;
+    }
+  }
+  return 0;
+}
+
+DRESULT disk_read(BYTE pdrv, BYTE *buff, LBA_t sector, UINT count)
+{
+  const board_interfaces_t *board = board_get_interfaces();
+
+  if (pdrv != 0u || sd_card_type == SD_CARD_NONE)
+  {
+    return RES_NOTRDY;
+  }
+  for (UINT i = 0; i < count; ++i)
+  {
+    if (sd_read_block(board, (uint32_t)sector + i, &buff[i * SD_BLOCK_SIZE]) != APP_STATUS_OK)
+    {
+      return RES_ERROR;
+    }
+  }
+  return RES_OK;
+}
+
+DRESULT disk_write(BYTE pdrv, const BYTE *buff, LBA_t sector, UINT count)
+{
+  const board_interfaces_t *board = board_get_interfaces();
+
+  if (pdrv != 0u || sd_card_type == SD_CARD_NONE)
+  {
+    return RES_NOTRDY;
+  }
+  for (UINT i = 0; i < count; ++i)
+  {
+    if (sd_write_block(board, (uint32_t)sector + i, &buff[i * SD_BLOCK_SIZE]) != APP_STATUS_OK)
+    {
+      return RES_ERROR;
+    }
+  }
+  return RES_OK;
+}
+
+DRESULT disk_ioctl(BYTE pdrv, BYTE cmd, void *buff)
+{
+  (void)buff;
+
+  if (pdrv != 0u)
+  {
+    return RES_PARERR;
+  }
+
+  switch (cmd)
+  {
+    case CTRL_SYNC:
+      /* sd_write_block wartet das Busy-Ende bereits ab. */
+      return RES_OK;
+    case GET_SECTOR_SIZE:
+      *(WORD *)buff = SD_BLOCK_SIZE;
+      return RES_OK;
+    case GET_BLOCK_SIZE:
+      *(DWORD *)buff = 1;
+      return RES_OK;
+    default:
+      return RES_PARERR;
+  }
+}
+
+/* ==========================================================================
+ * Storage-Logger (FatFS-Ebene).
+ * ========================================================================== */
+
+static FATFS storage_fs;
+static bool storage_logger_ready = false;
+
+app_status_t storage_logger_init(void)
+{
+  static FIL fil;
+  char line[64];
+  FRESULT res;
+
+  storage_logger_ready = false;
+
+  res = f_mount(&storage_fs, "", 1);
+  if (res != FR_OK)
+  {
+    printf("[microSD] FatFS-Mount fehlgeschlagen (FRESULT=%d).\r\n", (int)res);
     return APP_STATUS_ERROR;
   }
-  printf("[microSD] Sektor 0 gelesen, Signatur %02X %02X (erwartet 55 AA).\r\n",
-         block[510], block[511]);
+
+  /* Schreib-/Lesetest: Datei anlegen, Zeile schreiben, zuruecklesen. */
+  res = f_open(&fil, "BRINGUP.TXT", FA_CREATE_ALWAYS | FA_WRITE);
+  if (res != FR_OK)
+  {
+    printf("[microSD] Testdatei liess sich nicht anlegen (FRESULT=%d).\r\n", (int)res);
+    return APP_STATUS_ERROR;
+  }
+  f_printf(&fil, "Datenlogger-Bring-up ok, Tick=%lu ms\n", (unsigned long)HAL_GetTick());
+  res = f_close(&fil);
+  if (res != FR_OK)
+  {
+    printf("[microSD] Testdatei liess sich nicht schreiben (FRESULT=%d).\r\n", (int)res);
+    return APP_STATUS_ERROR;
+  }
+
+  res = f_open(&fil, "BRINGUP.TXT", FA_READ);
+  if (res != FR_OK || f_gets(line, sizeof(line), &fil) == NULL)
+  {
+    printf("[microSD] Testdatei liess sich nicht zuruecklesen (FRESULT=%d).\r\n", (int)res);
+    (void)f_close(&fil);
+    return APP_STATUS_ERROR;
+  }
+  (void)f_close(&fil);
+
+  /* Zeilenumbruch fuer die Ausgabe entfernen. */
+  line[strcspn(line, "\r\n")] = '\0';
+  printf("[microSD] FatFS ok, BRINGUP.TXT: \"%s\"\r\n", line);
 
   storage_logger_ready = true;
   return APP_STATUS_OK;
@@ -299,7 +461,7 @@ app_status_t storage_logger_init(void)
 
 app_status_t storage_logger_write_sample(const app_sample_t *sample)
 {
-  /* Spaeter: app_sample_t als CSV- oder Binaerdatensatz auf die microSD schreiben. */
+  /* Spaeter: app_sample_t als CSV-Datensatz in die Logdatei schreiben. */
   (void)sample;
   return APP_STATUS_NOT_READY;
 }
