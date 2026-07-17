@@ -410,7 +410,13 @@ DRESULT disk_ioctl(BYTE pdrv, BYTE cmd, void *buff)
  * ========================================================================== */
 
 static FATFS storage_fs;
+static FIL storage_log_file;
 static bool storage_logger_ready = false;
+static uint32_t storage_sample_count = 0;
+
+/* Alle N Datensaetze auf die Karte synchronisieren: begrenzt den Datenverlust
+ * bei Stromausfall (Sturz, Akku ab) auf rund eine halbe Sekunde. */
+#define STORAGE_SYNC_EVERY_N_SAMPLES 25u
 
 app_status_t storage_logger_init(void)
 {
@@ -455,15 +461,104 @@ app_status_t storage_logger_init(void)
   line[strcspn(line, "\r\n")] = '\0';
   printf("[microSD] FatFS ok, BRINGUP.TXT: \"%s\"\r\n", line);
 
+  return storage_logger_start();
+}
+
+app_status_t storage_logger_start(void)
+{
+  char name[16];
+  FILINFO info;
+  FRESULT res;
+
+  if (storage_logger_ready)
+  {
+    return APP_STATUS_OK; /* laeuft bereits */
+  }
+
+  /* Logdatei mit fortlaufender Nummer anlegen (nichts ueberschreiben). */
+  unsigned int num = 0;
+  for (; num < 1000u; ++num)
+  {
+    snprintf(name, sizeof(name), "LOG_%03u.CSV", num);
+    if (f_stat(name, &info) == FR_NO_FILE)
+    {
+      break;
+    }
+  }
+  res = f_open(&storage_log_file, name, FA_CREATE_ALWAYS | FA_WRITE);
+  if (res != FR_OK)
+  {
+    printf("[microSD] Logdatei %s liess sich nicht anlegen (FRESULT=%d).\r\n", name, (int)res);
+    return APP_STATUS_ERROR;
+  }
+  f_puts("t_ms;fix;lat_e7;lon_e7;v_mm_s;utc_ms;"
+         "p_vorne_raw;p_hinten_raw;"
+         "imu_ax;imu_ay;imu_az;imu_gx;imu_gy;imu_gz;"
+         "acc400_x;acc400_y;acc400_z\n", &storage_log_file);
+  if (f_sync(&storage_log_file) != FR_OK)
+  {
+    printf("[microSD] Logdatei-Kopfzeile liess sich nicht schreiben.\r\n");
+    return APP_STATUS_ERROR;
+  }
+  printf("[microSD] Logdatei %s angelegt, Aufzeichnung laeuft.\r\n", name);
+
+  storage_sample_count = 0;
   storage_logger_ready = true;
+  return APP_STATUS_OK;
+}
+
+app_status_t storage_logger_stop(void)
+{
+  if (!storage_logger_ready)
+  {
+    return APP_STATUS_OK; /* nichts zu stoppen */
+  }
+
+  storage_logger_ready = false;
+  if (f_close(&storage_log_file) != FR_OK)
+  {
+    printf("[microSD] Logdatei liess sich nicht schliessen.\r\n");
+    return APP_STATUS_ERROR;
+  }
+  printf("[microSD] Aufzeichnung gestoppt, Datei geschlossen (%lu Datensaetze).\r\n",
+         (unsigned long)storage_sample_count);
   return APP_STATUS_OK;
 }
 
 app_status_t storage_logger_write_sample(const app_sample_t *sample)
 {
-  /* Spaeter: app_sample_t als CSV-Datensatz in die Logdatei schreiben. */
-  (void)sample;
-  return APP_STATUS_NOT_READY;
+  if (!storage_logger_ready || sample == NULL)
+  {
+    return APP_STATUS_NOT_READY;
+  }
+
+  int written = f_printf(&storage_log_file,
+                         "%lu;%d;%ld;%ld;%lu;%lu;%u;%u;%d;%d;%d;%d;%d;%d;%d;%d;%d\n",
+                         (unsigned long)sample->timestamp_ms,
+                         sample->gnss.fix_valid ? 1 : 0,
+                         (long)sample->gnss.latitude_e7,
+                         (long)sample->gnss.longitude_e7,
+                         (unsigned long)sample->gnss.speed_mm_s,
+                         (unsigned long)sample->gnss.utc_time_ms,
+                         sample->brake_pressure.front_raw,
+                         sample->brake_pressure.back_raw,
+                         sample->imu.accel_x_raw, sample->imu.accel_y_raw, sample->imu.accel_z_raw,
+                         sample->imu.gyro_x_raw, sample->imu.gyro_y_raw, sample->imu.gyro_z_raw,
+                         sample->acc_400g.accel_x_raw, sample->acc_400g.accel_y_raw,
+                         sample->acc_400g.accel_z_raw);
+  if (written < 0)
+  {
+    return APP_STATUS_ERROR;
+  }
+
+  if (++storage_sample_count % STORAGE_SYNC_EVERY_N_SAMPLES == 0u)
+  {
+    if (f_sync(&storage_log_file) != FR_OK)
+    {
+      return APP_STATUS_ERROR;
+    }
+  }
+  return APP_STATUS_OK;
 }
 
 bool storage_logger_is_ready(void)

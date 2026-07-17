@@ -15,6 +15,12 @@ app_status_t storage_logger_init(void);
 /* Schreibt einen kompletten Messdatensatz auf die microSD. */
 app_status_t storage_logger_write_sample(const app_sample_t *sample);
 
+/* Beendet die laufende Aufzeichnung sauber (Datei schliessen). */
+app_status_t storage_logger_stop(void);
+
+/* Startet eine neue Logdatei (naechste freie LOG_nnn.CSV). */
+app_status_t storage_logger_start(void);
+
 /* Meldet, ob der Logger bereit ist, Daten dauerhaft zu speichern. */
 bool storage_logger_is_ready(void);
 
