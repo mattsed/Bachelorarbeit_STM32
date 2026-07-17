@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "board/board.h"
+#include "sensors/gnss.h"
 
 #include "ff.h"
 #include "diskio.h"
@@ -403,6 +404,27 @@ DRESULT disk_ioctl(BYTE pdrv, BYTE cmd, void *buff)
     default:
       return RES_PARERR;
   }
+}
+
+/* Liefert FatFS den Zeitstempel fuer Dateioperationen. Sobald das GNSS
+ * einmal Datum+Zeit geliefert hat, tragen die Dateien echte UTC-Zeit
+ * (bewusst keine Zeitzonen-Umrechnung: UTC, nicht MESZ). Ohne GNSS-Empfang
+ * gilt der erkennbare Platzhalter 01.01.2026. FatFS fragt auch bei
+ * f_sync/f_close erneut -- eine ohne Fix gestartete Datei bekommt beim
+ * Schliessen trotzdem den echten Stempel. */
+DWORD get_fattime(void)
+{
+  uint16_t year = 2026;
+  uint8_t month = 1, day = 1, hour = 0, minute = 0, second = 0;
+
+  (void)gnss_get_utc_datetime(&year, &month, &day, &hour, &minute, &second);
+
+  return ((DWORD)(year - 1980) << 25) |
+         ((DWORD)month << 21) |
+         ((DWORD)day << 16) |
+         ((DWORD)hour << 11) |
+         ((DWORD)minute << 5) |
+         ((DWORD)second >> 1);
 }
 
 /* ==========================================================================

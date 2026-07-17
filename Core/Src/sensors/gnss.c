@@ -248,6 +248,11 @@ static char gnss_line[GNSS_LINE_LEN];
 static uint32_t gnss_line_len = 0;
 static uint32_t gnss_last_poll_ms = 0;
 
+/* Zuletzt empfangenes UTC-Datum (RMC-Feld 9); 0 = noch keins empfangen. */
+static uint8_t gnss_date_day = 0;
+static uint8_t gnss_date_month = 0;
+static uint16_t gnss_date_year = 0;
+
 /* Zerlegt "ddmm.mmmm" (bzw. dddmm.mmmm) nach Grad * 10^7. */
 static int32_t gnss_coord_to_e7(const char *field, int deg_digits)
 {
@@ -290,7 +295,7 @@ static void gnss_parse_rmc(const char *line)
       field[nfields++] = p + 1;
     }
   }
-  if (nfields < 8)
+  if (nfields < 10)
   {
     return;
   }
@@ -342,6 +347,18 @@ static void gnss_parse_rmc(const char *line)
       }
     }
     gnss_last.speed_mm_s = (uint32_t)(knots * 514.444 + 0.5);
+
+    /* Feld 9: Datum ddmmyy -- nur bei gueltigem Fix uebernehmen,
+     * ohne Fix kann das Feld leer oder veraltet sein. */
+    const char *d = field[9];
+    if (d[0] >= '0' && d[0] <= '9' && d[1] >= '0' && d[1] <= '9' &&
+        d[2] >= '0' && d[2] <= '9' && d[3] >= '0' && d[3] <= '9' &&
+        d[4] >= '0' && d[4] <= '9' && d[5] >= '0' && d[5] <= '9')
+    {
+      gnss_date_day = (uint8_t)((d[0] - '0') * 10 + (d[1] - '0'));
+      gnss_date_month = (uint8_t)((d[2] - '0') * 10 + (d[3] - '0'));
+      gnss_date_year = (uint16_t)(2000 + (d[4] - '0') * 10 + (d[5] - '0'));
+    }
   }
 }
 
@@ -406,6 +423,24 @@ app_status_t gnss_read(gnss_data_t *data)
   }
   *data = gnss_last;
   return APP_STATUS_OK;
+}
+
+bool gnss_get_utc_datetime(uint16_t *year, uint8_t *month, uint8_t *day,
+                           uint8_t *hour, uint8_t *minute, uint8_t *second)
+{
+  if (gnss_date_year == 0u)
+  {
+    return false; /* noch kein Datum vom GNSS empfangen */
+  }
+
+  uint32_t total_s = gnss_last.utc_time_ms / 1000u;
+  *year = gnss_date_year;
+  *month = gnss_date_month;
+  *day = gnss_date_day;
+  *hour = (uint8_t)(total_s / 3600u);
+  *minute = (uint8_t)((total_s / 60u) % 60u);
+  *second = (uint8_t)(total_s % 60u);
+  return true;
 }
 
 bool gnss_is_ready(void)
