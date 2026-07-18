@@ -28,18 +28,25 @@ static void app_check_user_button(void)
   GPIO_PinState raw = HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13);
   uint32_t now = HAL_GetTick();
 
+  /* Schritt 1: Bei jeder Pegelaenderung nur den Zeitpunkt merken --
+   * das mechanische Prellen des Kontakts erzeugt hier viele schnelle
+   * Wechsel, die alle wieder von vorn zaehlen. */
   if (raw != last_raw)
   {
     last_raw = raw;
     last_change_ms = now;
     return;
   }
+  /* Schritt 2: Erst wenn der Pegel 50 ms lang stabil war UND sich vom
+   * zuletzt akzeptierten Zustand unterscheidet, gilt er als echt. */
   if ((now - last_change_ms) < APP_BUTTON_DEBOUNCE_MS || raw == stable_state)
   {
     return;
   }
   stable_state = raw;
 
+  /* Schritt 3: Nur die Flanke "losgelassen -> gedrueckt" schaltet um
+   * (das Loslassen selbst loest nichts aus). */
   if (stable_state == GPIO_PIN_SET) /* Knopf gedrueckt */
   {
     if (storage_logger_is_ready())
@@ -55,6 +62,10 @@ static void app_check_user_button(void)
 
 app_status_t app_init(void)
 {
+  /* Alle Module einmalig initialisieren. Die Rueckgabewerte werden bewusst
+   * verworfen ((void)-Cast): Ein fehlgeschlagenes Modul (z. B. keine
+   * SD-Karte) soll den Start der uebrigen nicht verhindern. Jedes Modul
+   * meldet seinen Status selbst per printf auf der Konsole. */
   (void)board_init();
   (void)gnss_init();
   (void)brake_pressure_init();
@@ -102,6 +113,10 @@ void app_run(void)
     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
   }
 
+  /* Messtakt: erst wenn die naechste 20-ms-Marke erreicht ist, geht es
+   * weiter -- sonst endet die Schleifenrunde hier. Der naechste Termin wird
+   * relativ zum vorigen fortgeschrieben (nicht relativ zu "jetzt"), damit
+   * sich kleine Verspaetungen nicht aufsummieren. */
   if (now < next_sample_ms)
   {
     return;
@@ -109,6 +124,10 @@ void app_run(void)
   next_sample_ms = (next_sample_ms == 0u) ? now + APP_SAMPLE_PERIOD_MS
                                           : next_sample_ms + APP_SAMPLE_PERIOD_MS;
 
+  /* Einen kompletten Messdatensatz einsammeln: ein Zeitstempel, dann alle
+   * Sensoren unmittelbar nacheinander -- so gehoeren die Werte einer
+   * CSV-Zeile zeitlich auf <1 ms zusammen. Nicht bereite Module lassen
+   * ihre Felder einfach auf 0 (memset oben). */
   app_sample_t sample;
   memset(&sample, 0, sizeof(sample));
   sample.timestamp_ms = now;
@@ -117,5 +136,6 @@ void app_run(void)
   (void)imu_lsm6dso_read(&sample.imu);
   (void)acc_adxl373_read(&sample.acc_400g);
 
+  /* Datensatz als CSV-Zeile auf die microSD schreiben (falls Logging aktiv). */
   (void)storage_logger_write_sample(&sample);
 }

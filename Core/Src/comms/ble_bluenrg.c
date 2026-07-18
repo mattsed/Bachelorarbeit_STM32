@@ -87,6 +87,9 @@ static int ble_spi_read(const board_interfaces_t *board, uint8_t *buf, uint16_t 
   uint8_t zero = 0x00u;
   int n = -1;
 
+  /* Lese-Header austauschen: Die MCU sendet 0x0B + 4 Nullbytes, das Modul
+   * antwortet gleichzeitig mit seinem Status -- in Byte 3/4 steht, wie
+   * viele Ereignis-Bytes zum Abholen bereitliegen. */
   ble_cs(board, GPIO_PIN_RESET);
   (void)HAL_SPI_TransmitReceive(board->ble_spi, hdr_tx, hdr_rx, 5, 100);
   for (int i = 0; i < 5; ++i)
@@ -95,6 +98,9 @@ static int ble_spi_read(const board_interfaces_t *board, uint8_t *buf, uint16_t 
   }
 
   uint16_t avail = (uint16_t)(hdr_rx[3] | (hdr_rx[4] << 8));
+  /* Liegen Daten an (0xFFFF = Modul hat gar nicht geantwortet), werden sie
+   * Byte fuer Byte abgeholt -- CS bleibt dabei durchgehend low, denn die
+   * Transaktion endet erst mit dem CS-Anheben weiter unten. */
   if (avail > 0u && avail != 0xFFFFu)
   {
     uint16_t count = (avail < maxlen) ? avail : maxlen;
@@ -122,6 +128,9 @@ static app_status_t ble_spi_write(const board_interfaces_t *board, const uint8_t
   uint8_t hdr_rx[5] = { 0 };
   uint32_t start = HAL_GetTick();
 
+  /* Schreiben laeuft als Wiederholschleife: CS anlegen, auf Bereitschaft
+   * warten, Header tauschen -- meldet das Modul zu wenig Pufferplatz,
+   * CS wieder anheben und den ganzen Versuch wiederholen (bis Timeout). */
   for (;;)
   {
     ble_cs(board, GPIO_PIN_RESET);

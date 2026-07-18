@@ -36,6 +36,9 @@ static app_status_t imu_lsm6dso_read_reg(const board_interfaces_t *board, uint8_
   uint8_t tx[2] = { (uint8_t)(reg | LSM6DSO_SPI_READ_BIT), 0xA5u };
   uint8_t rx[2] = { 0 };
 
+  /* SPI ist vollduplex: Waehrend Byte 1 (Adresse) gesendet wird, kommt
+   * rx[0] herein (bedeutungslos); waehrend des Fuellbytes antwortet der
+   * Sensor mit dem Registerinhalt in rx[1]. CS umrahmt die Transaktion. */
   imu_lsm6dso_cs(board, GPIO_PIN_RESET);
   HAL_StatusTypeDef result = HAL_SPI_TransmitReceive(board->sensor_spi, tx, rx, sizeof(tx), 10);
   imu_lsm6dso_cs(board, GPIO_PIN_SET);
@@ -81,7 +84,9 @@ app_status_t imu_lsm6dso_init(void)
     return APP_STATUS_ERROR;
   }
 
-  /* Messbetrieb konfigurieren. */
+  /* Messbetrieb konfigurieren -- der Sensor startet im Schlafmodus.
+   * Reihenfolge: erst CTRL3_C (BDU + Auto-Inkrement als Grundverhalten),
+   * dann Accel und Gyro einschalten (je 104 Hz + Messbereich). */
   if (imu_lsm6dso_write_reg(board, LSM6DSO_REG_CTRL3_C, LSM6DSO_CTRL3_C_VAL) != APP_STATUS_OK ||
       imu_lsm6dso_write_reg(board, LSM6DSO_REG_CTRL1_XL, LSM6DSO_CTRL1_XL_VAL) != APP_STATUS_OK ||
       imu_lsm6dso_write_reg(board, LSM6DSO_REG_CTRL2_G, LSM6DSO_CTRL2_G_VAL) != APP_STATUS_OK)
@@ -116,6 +121,9 @@ app_status_t imu_lsm6dso_read(imu_data_t *data)
     return APP_STATUS_ERROR;
   }
 
+  /* Bytes zu 16-Bit-Werten zusammensetzen: Der Sensor liefert little-endian
+   * (niederwertiges Byte zuerst), Reihenfolge laut Registerkarte erst
+   * Gyro X/Y/Z, dann Accel X/Y/Z. rx[0] ist das Echo des Adressbytes. */
   data->gyro_x_raw = (int16_t)((uint16_t)rx[1] | ((uint16_t)rx[2] << 8));
   data->gyro_y_raw = (int16_t)((uint16_t)rx[3] | ((uint16_t)rx[4] << 8));
   data->gyro_z_raw = (int16_t)((uint16_t)rx[5] | ((uint16_t)rx[6] << 8));

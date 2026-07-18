@@ -38,7 +38,9 @@ static float brake_raw_to_bar(uint16_t raw, float *sensor_volt)
 }
 
 /* Fuehrt einen Scan ueber beide Kanaele aus (Rank 1 = PA0/vorne,
- * Rank 2 = PA3/hinten). */
+ * Rank 2 = PA3/hinten). Der ADC ist im Scan-Modus konfiguriert: ein
+ * Start wandelt beide Kanaele nacheinander; nach jedem Wandlungsende
+ * (PollForConversion) liegt der jeweilige Wert im Datenregister. */
 static app_status_t brake_adc_scan(ADC_HandleTypeDef *adc, uint16_t *front, uint16_t *back)
 {
   if (HAL_ADC_Start(adc) != HAL_OK)
@@ -69,13 +71,17 @@ app_status_t brake_pressure_init(void)
 
   brake_pressure_ready = false;
 
-  /* Einmalige Selbstkalibrierung des ADC (Offsetabgleich). */
+  /* Einmalige Selbstkalibrierung des ADC: gleicht chipinterne
+   * Bauteiltoleranzen (Offsetfehler) aus. Muss vor der ersten Wandlung
+   * laufen, solange der ADC noch nicht gestartet ist. */
   if (HAL_ADCEx_Calibration_Start(board->brake_adc, ADC_SINGLE_ENDED) != HAL_OK)
   {
     printf("[Bremsdruck] ADC-Kalibrierung fehlgeschlagen.\r\n");
     return APP_STATUS_ERROR;
   }
 
+  /* Kontrollmessung: 8 Scans mitteln, um das Rauschen zu daempfen, und
+   * das Ergebnis als Diagnose ausgeben (Rohwert, Sensorspannung, bar). */
   for (uint32_t i = 0; i < BRAKE_AVG_SAMPLES; ++i)
   {
     uint16_t front = 0;

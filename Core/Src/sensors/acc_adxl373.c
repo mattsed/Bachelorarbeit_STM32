@@ -89,7 +89,10 @@ app_status_t acc_adxl373_init(void)
     return APP_STATUS_ERROR;
   }
 
-  /* Messbetrieb konfigurieren: ODR 400 Hz, Bandbreite 200 Hz, Full-BW-Modus. */
+  /* Messbetrieb konfigurieren: ODR 400 Hz (TIMING), Filterbandbreite
+   * 200 Hz (MEASURE), zuletzt der Wechsel vom Standby in den
+   * Full-Bandwidth-Messmodus (POWER_CTL) -- erst danach liefert der
+   * Sensor kontinuierlich Messwerte. */
   if (acc_adxl373_write_reg(board, ADXL373_REG_TIMING, ADXL373_TIMING_VAL) != APP_STATUS_OK ||
       acc_adxl373_write_reg(board, ADXL373_REG_MEASURE, ADXL373_MEASURE_VAL) != APP_STATUS_OK ||
       acc_adxl373_write_reg(board, ADXL373_REG_POWER_CTL, ADXL373_POWER_CTL_VAL) != APP_STATUS_OK)

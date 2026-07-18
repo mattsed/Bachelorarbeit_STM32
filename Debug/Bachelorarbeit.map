@@ -7442,7 +7442,7 @@ LOAD C:/Program Files/STM32CubeIDE_2.1.1/STM32CubeIDE/plugins/com.st.stm32cube.i
 LOAD C:/Program Files/STM32CubeIDE_2.1.1/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.14.3.rel1.win32_1.0.100.202602081740/tools/bin/../lib/gcc/arm-none-eabi/14.3.1/../../../../arm-none-eabi/lib/thumb/v8-m.main+fp/hard\libm.a
 LOAD C:/Program Files/STM32CubeIDE_2.1.1/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.14.3.rel1.win32_1.0.100.202602081740/tools/bin/../lib/gcc/arm-none-eabi/14.3.1/thumb/v8-m.main+fp/hard\libgcc.a
 
-.debug_info     0x00000000    0x23dc1
+.debug_info     0x00000000    0x23dc4
  .debug_info    0x00000000      0x619 ./Core/Src/app/app.o
  .debug_info    0x00000619     0x12db ./Core/Src/board/board.o
  .debug_info    0x000018f4     0x19cf ./Core/Src/comms/ble_bluenrg.o
@@ -7454,23 +7454,23 @@ LOAD C:/Program Files/STM32CubeIDE_2.1.1/STM32CubeIDE/plugins/com.st.stm32cube.i
  .debug_info    0x00007c2a      0xd8e ./Core/Src/system_stm32h5xx.o
  .debug_info    0x000089b8     0x159b ./Core/Src/sensors/acc_adxl373.o
  .debug_info    0x00009f53     0x156e ./Core/Src/sensors/brake_pressure.o
- .debug_info    0x0000b4c1      0xd19 ./Core/Src/sensors/gnss.o
- .debug_info    0x0000c1da     0x15a6 ./Core/Src/sensors/imu_lsm6dso.o
- .debug_info    0x0000d780     0x1dce ./Core/Src/storage/ff.o
- .debug_info    0x0000f54e     0x25bf ./Core/Src/storage/storage_logger.o
- .debug_info    0x00011b0d       0x30 ./Core/Startup/startup_stm32h563zitx.o
- .debug_info    0x00011b3d     0x1bc0 ./Drivers/BSP/STM32H5xx_Nucleo/stm32h5xx_nucleo.o
- .debug_info    0x000136fd     0x139f ./Drivers/STM32H5xx_HAL_Driver/Src/stm32h5xx_hal.o
- .debug_info    0x00014a9c     0x237e ./Drivers/STM32H5xx_HAL_Driver/Src/stm32h5xx_hal_adc.o
- .debug_info    0x00016e1a     0x20b0 ./Drivers/STM32H5xx_HAL_Driver/Src/stm32h5xx_hal_adc_ex.o
- .debug_info    0x00018eca     0x1657 ./Drivers/STM32H5xx_HAL_Driver/Src/stm32h5xx_hal_cortex.o
- .debug_info    0x0001a521      0x7ca ./Drivers/STM32H5xx_HAL_Driver/Src/stm32h5xx_hal_exti.o
- .debug_info    0x0001aceb      0x6b6 ./Drivers/STM32H5xx_HAL_Driver/Src/stm32h5xx_hal_gpio.o
- .debug_info    0x0001b3a1     0x109f ./Drivers/STM32H5xx_HAL_Driver/Src/stm32h5xx_hal_rcc.o
- .debug_info    0x0001c440     0x12d7 ./Drivers/STM32H5xx_HAL_Driver/Src/stm32h5xx_hal_rcc_ex.o
- .debug_info    0x0001d717     0x158d ./Drivers/STM32H5xx_HAL_Driver/Src/stm32h5xx_hal_spi.o
- .debug_info    0x0001eca4     0x4030 ./Drivers/STM32H5xx_HAL_Driver/Src/stm32h5xx_hal_uart.o
- .debug_info    0x00022cd4     0x10ed ./Drivers/STM32H5xx_HAL_Driver/Src/stm32h5xx_hal_uart_ex.o
+ .debug_info    0x0000b4c1      0xd1c ./Core/Src/sensors/gnss.o
+ .debug_info    0x0000c1dd     0x15a6 ./Core/Src/sensors/imu_lsm6dso.o
+ .debug_info    0x0000d783     0x1dce ./Core/Src/storage/ff.o
+ .debug_info    0x0000f551     0x25bf ./Core/Src/storage/storage_logger.o
+ .debug_info    0x00011b10       0x30 ./Core/Startup/startup_stm32h563zitx.o
+ .debug_info    0x00011b40     0x1bc0 ./Drivers/BSP/STM32H5xx_Nucleo/stm32h5xx_nucleo.o
+ .debug_info    0x00013700     0x139f ./Drivers/STM32H5xx_HAL_Driver/Src/stm32h5xx_hal.o
+ .debug_info    0x00014a9f     0x237e ./Drivers/STM32H5xx_HAL_Driver/Src/stm32h5xx_hal_adc.o
+ .debug_info    0x00016e1d     0x20b0 ./Drivers/STM32H5xx_HAL_Driver/Src/stm32h5xx_hal_adc_ex.o
+ .debug_info    0x00018ecd     0x1657 ./Drivers/STM32H5xx_HAL_Driver/Src/stm32h5xx_hal_cortex.o
+ .debug_info    0x0001a524      0x7ca ./Drivers/STM32H5xx_HAL_Driver/Src/stm32h5xx_hal_exti.o
+ .debug_info    0x0001acee      0x6b6 ./Drivers/STM32H5xx_HAL_Driver/Src/stm32h5xx_hal_gpio.o
+ .debug_info    0x0001b3a4     0x109f ./Drivers/STM32H5xx_HAL_Driver/Src/stm32h5xx_hal_rcc.o
+ .debug_info    0x0001c443     0x12d7 ./Drivers/STM32H5xx_HAL_Driver/Src/stm32h5xx_hal_rcc_ex.o
+ .debug_info    0x0001d71a     0x158d ./Drivers/STM32H5xx_HAL_Driver/Src/stm32h5xx_hal_spi.o
+ .debug_info    0x0001eca7     0x4030 ./Drivers/STM32H5xx_HAL_Driver/Src/stm32h5xx_hal_uart.o
+ .debug_info    0x00022cd7     0x10ed ./Drivers/STM32H5xx_HAL_Driver/Src/stm32h5xx_hal_uart_ex.o
 
 .debug_abbrev   0x00000000     0x3f2e
  .debug_abbrev  0x00000000      0x1ef ./Core/Src/app/app.o
@@ -7755,7 +7755,7 @@ LOAD C:/Program Files/STM32CubeIDE_2.1.1/STM32CubeIDE/plugins/com.st.stm32cube.i
  .debug_macro   0x0003659d      0x2c1 ./Drivers/STM32H5xx_HAL_Driver/Src/stm32h5xx_hal_uart.o
  .debug_macro   0x0003685e      0x2a2 ./Drivers/STM32H5xx_HAL_Driver/Src/stm32h5xx_hal_uart_ex.o
 
-.debug_line     0x00000000    0x2169f
+.debug_line     0x00000000    0x216a1
  .debug_line    0x00000000      0xc63 ./Core/Src/app/app.o
  .debug_line    0x00000c63      0xa99 ./Core/Src/board/board.o
  .debug_line    0x000016fc      0xe94 ./Core/Src/comms/ble_bluenrg.o
@@ -7770,20 +7770,20 @@ LOAD C:/Program Files/STM32CubeIDE_2.1.1/STM32CubeIDE/plugins/com.st.stm32cube.i
  .debug_line    0x00007ff3     0x12c1 ./Core/Src/sensors/gnss.o
  .debug_line    0x000092b4      0xc2e ./Core/Src/sensors/imu_lsm6dso.o
  .debug_line    0x00009ee2     0x2b3b ./Core/Src/storage/ff.o
- .debug_line    0x0000ca1d     0x1276 ./Core/Src/storage/storage_logger.o
- .debug_line    0x0000dc93       0x7b ./Core/Startup/startup_stm32h563zitx.o
- .debug_line    0x0000dd0e      0xdfc ./Drivers/BSP/STM32H5xx_Nucleo/stm32h5xx_nucleo.o
- .debug_line    0x0000eb0a     0x10de ./Drivers/STM32H5xx_HAL_Driver/Src/stm32h5xx_hal.o
- .debug_line    0x0000fbe8     0x22e5 ./Drivers/STM32H5xx_HAL_Driver/Src/stm32h5xx_hal_adc.o
- .debug_line    0x00011ecd     0x1d1f ./Drivers/STM32H5xx_HAL_Driver/Src/stm32h5xx_hal_adc_ex.o
- .debug_line    0x00013bec     0x100d ./Drivers/STM32H5xx_HAL_Driver/Src/stm32h5xx_hal_cortex.o
- .debug_line    0x00014bf9      0xe02 ./Drivers/STM32H5xx_HAL_Driver/Src/stm32h5xx_hal_exti.o
- .debug_line    0x000159fb      0xdb3 ./Drivers/STM32H5xx_HAL_Driver/Src/stm32h5xx_hal_gpio.o
- .debug_line    0x000167ae     0x1556 ./Drivers/STM32H5xx_HAL_Driver/Src/stm32h5xx_hal_rcc.o
- .debug_line    0x00017d04     0x2fe4 ./Drivers/STM32H5xx_HAL_Driver/Src/stm32h5xx_hal_rcc_ex.o
- .debug_line    0x0001ace8     0x23e7 ./Drivers/STM32H5xx_HAL_Driver/Src/stm32h5xx_hal_spi.o
- .debug_line    0x0001d0cf     0x36a0 ./Drivers/STM32H5xx_HAL_Driver/Src/stm32h5xx_hal_uart.o
- .debug_line    0x0002076f      0xf30 ./Drivers/STM32H5xx_HAL_Driver/Src/stm32h5xx_hal_uart_ex.o
+ .debug_line    0x0000ca1d     0x1278 ./Core/Src/storage/storage_logger.o
+ .debug_line    0x0000dc95       0x7b ./Core/Startup/startup_stm32h563zitx.o
+ .debug_line    0x0000dd10      0xdfc ./Drivers/BSP/STM32H5xx_Nucleo/stm32h5xx_nucleo.o
+ .debug_line    0x0000eb0c     0x10de ./Drivers/STM32H5xx_HAL_Driver/Src/stm32h5xx_hal.o
+ .debug_line    0x0000fbea     0x22e5 ./Drivers/STM32H5xx_HAL_Driver/Src/stm32h5xx_hal_adc.o
+ .debug_line    0x00011ecf     0x1d1f ./Drivers/STM32H5xx_HAL_Driver/Src/stm32h5xx_hal_adc_ex.o
+ .debug_line    0x00013bee     0x100d ./Drivers/STM32H5xx_HAL_Driver/Src/stm32h5xx_hal_cortex.o
+ .debug_line    0x00014bfb      0xe02 ./Drivers/STM32H5xx_HAL_Driver/Src/stm32h5xx_hal_exti.o
+ .debug_line    0x000159fd      0xdb3 ./Drivers/STM32H5xx_HAL_Driver/Src/stm32h5xx_hal_gpio.o
+ .debug_line    0x000167b0     0x1556 ./Drivers/STM32H5xx_HAL_Driver/Src/stm32h5xx_hal_rcc.o
+ .debug_line    0x00017d06     0x2fe4 ./Drivers/STM32H5xx_HAL_Driver/Src/stm32h5xx_hal_rcc_ex.o
+ .debug_line    0x0001acea     0x23e7 ./Drivers/STM32H5xx_HAL_Driver/Src/stm32h5xx_hal_spi.o
+ .debug_line    0x0001d0d1     0x36a0 ./Drivers/STM32H5xx_HAL_Driver/Src/stm32h5xx_hal_uart.o
+ .debug_line    0x00020771      0xf30 ./Drivers/STM32H5xx_HAL_Driver/Src/stm32h5xx_hal_uart_ex.o
 
 .debug_str      0x00000000   0x150238
  .debug_str     0x00000000   0x150238 ./Core/Src/app/app.o

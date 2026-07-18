@@ -27,9 +27,9 @@ Idx Name          Size      VMA       LMA       File off  Algn
                   ALLOC
  11 .ARM.attributes 00000036  00000000  00000000  00015084  2**0
                   CONTENTS, READONLY
- 12 .debug_info   00023dc1  00000000  00000000  000150ba  2**0
+ 12 .debug_info   00023dc4  00000000  00000000  000150ba  2**0
                   CONTENTS, READONLY, DEBUGGING, OCTETS
- 13 .debug_abbrev 00003f2e  00000000  00000000  00038e7b  2**0
+ 13 .debug_abbrev 00003f2e  00000000  00000000  00038e7e  2**0
                   CONTENTS, READONLY, DEBUGGING, OCTETS
  14 .debug_aranges 00001658  00000000  00000000  0003cdb0  2**3
                   CONTENTS, READONLY, DEBUGGING, OCTETS
@@ -37,15 +37,15 @@ Idx Name          Size      VMA       LMA       File off  Algn
                   CONTENTS, READONLY, DEBUGGING, OCTETS
  16 .debug_macro  00036b00  00000000  00000000  0003f525  2**0
                   CONTENTS, READONLY, DEBUGGING, OCTETS
- 17 .debug_line   0002169f  00000000  00000000  00076025  2**0
+ 17 .debug_line   000216a1  00000000  00000000  00076025  2**0
                   CONTENTS, READONLY, DEBUGGING, OCTETS
- 18 .debug_str    00150238  00000000  00000000  000976c4  2**0
+ 18 .debug_str    00150238  00000000  00000000  000976c6  2**0
                   CONTENTS, READONLY, DEBUGGING, OCTETS
- 19 .comment      00000043  00000000  00000000  001e78fc  2**0
+ 19 .comment      00000043  00000000  00000000  001e78fe  2**0
                   CONTENTS, READONLY
- 20 .debug_frame  00006488  00000000  00000000  001e7940  2**2
+ 20 .debug_frame  00006488  00000000  00000000  001e7944  2**2
                   CONTENTS, READONLY, DEBUGGING, OCTETS
- 21 .debug_line_str 00000065  00000000  00000000  001eddc8  2**0
+ 21 .debug_line_str 00000065  00000000  00000000  001eddcc  2**0
                   CONTENTS, READONLY, DEBUGGING, OCTETS
 
 Disassembly of section .text:
@@ -1099,6 +1099,9 @@ static void app_check_user_button(void)
  8000e50:	f006 fbb0 	bl	80075b4 <HAL_GetTick>
  8000e54:	6038      	str	r0, [r7, #0]
 
+  /* Schritt 1: Bei jeder Pegelaenderung nur den Zeitpunkt merken --
+   * das mechanische Prellen des Kontakts erzeugt hier viele schnelle
+   * Wechsel, die alle wieder von vorn zaehlen. */
   if (raw != last_raw)
  8000e56:	4b17      	ldr	r3, [pc, #92]	@ (8000eb4 <app_check_user_button+0x78>)
  8000e58:	781b      	ldrb	r3, [r3, #0]
@@ -1117,6 +1120,8 @@ static void app_check_user_button(void)
     return;
  8000e6c:	e01d      	b.n	8000eaa <app_check_user_button+0x6e>
   }
+  /* Schritt 2: Erst wenn der Pegel 50 ms lang stabil war UND sich vom
+   * zuletzt akzeptierten Zustand unterscheidet, gilt er als echt. */
   if ((now - last_change_ms) < APP_BUTTON_DEBOUNCE_MS || raw == stable_state)
  8000e6e:	4b12      	ldr	r3, [pc, #72]	@ (8000eb8 <app_check_user_button+0x7c>)
  8000e70:	681b      	ldr	r3, [r3, #0]
@@ -1137,6 +1142,8 @@ static void app_check_user_button(void)
  8000e86:	79fb      	ldrb	r3, [r7, #7]
  8000e88:	7013      	strb	r3, [r2, #0]
 
+  /* Schritt 3: Nur die Flanke "losgelassen -> gedrueckt" schaltet um
+   * (das Loslassen selbst loest nichts aus). */
   if (stable_state == GPIO_PIN_SET) /* Knopf gedrueckt */
  8000e8a:	4b0c      	ldr	r3, [pc, #48]	@ (8000ebc <app_check_user_button+0x80>)
  8000e8c:	781b      	ldrb	r3, [r3, #0]
@@ -1177,6 +1184,10 @@ app_status_t app_init(void)
 {
  8000ec0:	b580      	push	{r7, lr}
  8000ec2:	af00      	add	r7, sp, #0
+  /* Alle Module einmalig initialisieren. Die Rueckgabewerte werden bewusst
+   * verworfen ((void)-Cast): Ein fehlgeschlagenes Modul (z. B. keine
+   * SD-Karte) soll den Start der uebrigen nicht verhindern. Jedes Modul
+   * meldet seinen Status selbst per printf auf der Konsole. */
   (void)board_init();
  8000ec4:	f000 f88c 	bl	8000fe0 <board_init>
   (void)gnss_init();
@@ -1275,8 +1286,11 @@ void app_run(void)
  8000f4a:	2101      	movs	r1, #1
  8000f4c:	481d      	ldr	r0, [pc, #116]	@ (8000fc4 <app_run+0xbc>)
  8000f4e:	f008 fb95 	bl	800967c <HAL_GPIO_WritePin>
-  }
 
+  /* Messtakt: erst wenn die naechste 20-ms-Marke erreicht ist, geht es
+   * weiter -- sonst endet die Schleifenrunde hier. Der naechste Termin wird
+   * relativ zum vorigen fortgeschrieben (nicht relativ zu "jetzt"), damit
+   * sich kleine Verspaetungen nicht aufsummieren. */
   if (now < next_sample_ms)
  8000f52:	4b1d      	ldr	r3, [pc, #116]	@ (8000fc8 <app_run+0xc0>)
  8000f54:	681b      	ldr	r3, [r3, #0]
@@ -1301,7 +1315,10 @@ void app_run(void)
   next_sample_ms = (next_sample_ms == 0u) ? now + APP_SAMPLE_PERIOD_MS
  8000f70:	4a15      	ldr	r2, [pc, #84]	@ (8000fc8 <app_run+0xc0>)
  8000f72:	6013      	str	r3, [r2, #0]
-
+  /* Einen kompletten Messdatensatz einsammeln: ein Zeitstempel, dann alle
+   * Sensoren unmittelbar nacheinander -- so gehoeren die Werte einer
+   * CSV-Zeile zeitlich auf <1 ms zusammen. Nicht bereite Module lassen
+   * ihre Felder einfach auf 0 (memset oben). */
   app_sample_t sample;
   memset(&sample, 0, sizeof(sample));
  8000f74:	1d3b      	adds	r3, r7, #4
@@ -1333,6 +1350,7 @@ void app_run(void)
  8000fa6:	4618      	mov	r0, r3
  8000fa8:	f001 fc84 	bl	80028b4 <acc_adxl373_read>
 
+  /* Datensatz als CSV-Zeile auf die microSD schreiben (falls Logging aktiv). */
   (void)storage_logger_write_sample(&sample);
  8000fac:	1d3b      	adds	r3, r7, #4
  8000fae:	4618      	mov	r0, r3
@@ -1616,6 +1634,9 @@ static int ble_spi_read(const board_interfaces_t *board, uint8_t *buf, uint16_t 
  8001142:	f04f 33ff 	mov.w	r3, #4294967295
  8001146:	637b      	str	r3, [r7, #52]	@ 0x34
 
+  /* Lese-Header austauschen: Die MCU sendet 0x0B + 4 Nullbytes, das Modul
+   * antwortet gleichzeitig mit seinem Status -- in Byte 3/4 steht, wie
+   * viele Ereignis-Bytes zum Abholen bereitliegen. */
   ble_cs(board, GPIO_PIN_RESET);
  8001148:	2100      	movs	r1, #0
  800114a:	68f8      	ldr	r0, [r7, #12]
@@ -1663,6 +1684,9 @@ static int ble_spi_read(const board_interfaces_t *board, uint8_t *buf, uint16_t 
  8001198:	4313      	orrs	r3, r2
  800119a:	b21b      	sxth	r3, r3
  800119c:	85bb      	strh	r3, [r7, #44]	@ 0x2c
+  /* Liegen Daten an (0xFFFF = Modul hat gar nicht geantwortet), werden sie
+   * Byte fuer Byte abgeholt -- CS bleibt dabei durchgehend low, denn die
+   * Transaktion endet erst mit dem CS-Anheben weiter unten. */
   if (avail > 0u && avail != 0xFFFFu)
  800119e:	8dbb      	ldrh	r3, [r7, #44]	@ 0x2c
  80011a0:	2b00      	cmp	r3, #0
@@ -1767,7 +1791,9 @@ static app_status_t ble_spi_write(const board_interfaces_t *board, const uint8_t
   uint32_t start = HAL_GetTick();
  8001246:	f006 f9b5 	bl	80075b4 <HAL_GetTick>
  800124a:	62b8      	str	r0, [r7, #40]	@ 0x28
-
+  /* Schreiben laeuft als Wiederholschleife: CS anlegen, auf Bereitschaft
+   * warten, Header tauschen -- meldet das Modul zu wenig Pufferplatz,
+   * CS wieder anheben und den ganzen Versuch wiederholen (bis Timeout). */
   for (;;)
   {
     ble_cs(board, GPIO_PIN_RESET);
@@ -5309,9 +5335,11 @@ app_status_t acc_adxl373_init(void)
     return APP_STATUS_ERROR;
  800284a:	2301      	movs	r3, #1
  800284c:	e023      	b.n	8002896 <acc_adxl373_init+0xc6>
-  }
 
-  /* Messbetrieb konfigurieren: ODR 400 Hz, Bandbreite 200 Hz, Full-BW-Modus. */
+  /* Messbetrieb konfigurieren: ODR 400 Hz (TIMING), Filterbandbreite
+   * 200 Hz (MEASURE), zuletzt der Wechsel vom Standby in den
+   * Full-Bandwidth-Messmodus (POWER_CTL) -- erst danach liefert der
+   * Sensor kontinuierlich Messwerte. */
   if (acc_adxl373_write_reg(board, ADXL373_REG_TIMING, ADXL373_TIMING_VAL) != APP_STATUS_OK ||
  800284e:	2200      	movs	r2, #0
  8002850:	213d      	movs	r1, #61	@ 0x3d
@@ -5560,9 +5588,10 @@ static float brake_raw_to_bar(uint16_t raw, float *sensor_volt)
  8002a14:	3cea0dbb 	.word	0x3cea0dbb
 
 08002a18 <brake_adc_scan>:
-
 /* Fuehrt einen Scan ueber beide Kanaele aus (Rank 1 = PA0/vorne,
- * Rank 2 = PA3/hinten). */
+ * Rank 2 = PA3/hinten). Der ADC ist im Scan-Modus konfiguriert: ein
+ * Start wandelt beide Kanaele nacheinander; nach jedem Wandlungsende
+ * (PollForConversion) liegt der jeweilige Wert im Datenregister. */
 static app_status_t brake_adc_scan(ADC_HandleTypeDef *adc, uint16_t *front, uint16_t *back)
 {
  8002a18:	b580      	push	{r7, lr}
@@ -5659,7 +5688,9 @@ app_status_t brake_pressure_init(void)
  8002aa6:	2200      	movs	r2, #0
  8002aa8:	701a      	strb	r2, [r3, #0]
 
-  /* Einmalige Selbstkalibrierung des ADC (Offsetabgleich). */
+  /* Einmalige Selbstkalibrierung des ADC: gleicht chipinterne
+   * Bauteiltoleranzen (Offsetfehler) aus. Muss vor der ersten Wandlung
+   * laufen, solange der ADC noch nicht gestartet ist. */
   if (HAL_ADCEx_Calibration_Start(board->brake_adc, ADC_SINGLE_ENDED) != HAL_OK)
  8002aaa:	69bb      	ldr	r3, [r7, #24]
  8002aac:	685b      	ldr	r3, [r3, #4]
@@ -5678,6 +5709,8 @@ app_status_t brake_pressure_init(void)
  8002ac4:	e09c      	b.n	8002c00 <brake_pressure_init+0x170>
   }
 
+  /* Kontrollmessung: 8 Scans mitteln, um das Rauschen zu daempfen, und
+   * das Ergebnis als Diagnose ausgeben (Rohwert, Sensorspannung, bar). */
   for (uint32_t i = 0; i < BRAKE_AVG_SAMPLES; ++i)
  8002ac6:	2300      	movs	r3, #0
  8002ac8:	61fb      	str	r3, [r7, #28]
@@ -6492,10 +6525,13 @@ app_status_t gnss_init(void)
  8003030:	2200      	movs	r2, #0
  8003032:	701a      	strb	r2, [r3, #0]
 
+  /* Schritt 1: die beiden GPIOs als Open-Drain-I2C-Leitungen aufsetzen. */
   gnss_i2c_pins_init();
  8003034:	f7ff ff36 	bl	8002ea4 <gnss_i2c_pins_init>
 
-  /* Erreichbarkeit pruefen (Adress-ACK). */
+  /* Schritt 2: Erreichbarkeit pruefen. Ein Adressbyte senden und schauen,
+   * ob der Teseo mit ACK antwortet (SDA im 9. Takt auf low zieht) --
+   * beweist Versorgung, Verdrahtung und Adresse in einem. */
   gnss_i2c_start();
  8003038:	f7ff fe86 	bl	8002d48 <gnss_i2c_start>
   bool present = gnss_i2c_write_byte((uint8_t)(GNSS_I2C_ADDR << 1));
@@ -6521,7 +6557,9 @@ app_status_t gnss_init(void)
  8003060:	e05e      	b.n	8003120 <gnss_init+0x100>
   }
 
-  /* NMEA-Strom einsammeln (das Modul sendet im Sekundentakt). */
+  /* Schritt 3: nachweisen, dass wirklich NMEA-Saetze kommen (mindestens
+   * ein "$G"-Satzanfang). Das Modul sendet im Sekundentakt; direkt nach
+   * einem Board-Reset bootet es selbst neu, daher das grosse Zeitfenster. */
   uint32_t start = HAL_GetTick();
  8003062:	f004 faa7 	bl	80075b4 <HAL_GetTick>
  8003066:	6078      	str	r0, [r7, #4]
@@ -7429,8 +7467,10 @@ static void gnss_parse_rmc(const char *line)
  80036fc:	20000406 	.word	0x20000406
 
 08003700 <gnss_feed_char>:
-
-/* Verarbeitet ein einzelnes Zeichen aus dem NMEA-Strom. */
+/* Verarbeitet ein einzelnes Zeichen aus dem NMEA-Strom.
+ * Arbeitsweise wie eine kleine Zustandsmaschine: '$' beginnt eine neue
+ * Zeile, Zeilenende (\r oder \n) schliesst sie ab und stoesst die
+ * Auswertung an, alles dazwischen wird gesammelt. */
 static void gnss_feed_char(char c)
 {
  8003700:	b580      	push	{r7, lr}
@@ -7801,6 +7841,9 @@ static app_status_t imu_lsm6dso_read_reg(const board_interfaces_t *board, uint8_
  8003942:	2300      	movs	r3, #0
  8003944:	823b      	strh	r3, [r7, #16]
 
+  /* SPI ist vollduplex: Waehrend Byte 1 (Adresse) gesendet wird, kommt
+   * rx[0] herein (bedeutungslos); waehrend des Fuellbytes antwortet der
+   * Sensor mit dem Registerinhalt in rx[1]. CS umrahmt die Transaktion. */
   imu_lsm6dso_cs(board, GPIO_PIN_RESET);
  8003946:	2100      	movs	r1, #0
  8003948:	68f8      	ldr	r0, [r7, #12]
@@ -7948,7 +7991,9 @@ app_status_t imu_lsm6dso_init(void)
  8003a22:	e023      	b.n	8003a6c <imu_lsm6dso_init+0x90>
   }
 
-  /* Messbetrieb konfigurieren. */
+  /* Messbetrieb konfigurieren -- der Sensor startet im Schlafmodus.
+   * Reihenfolge: erst CTRL3_C (BDU + Auto-Inkrement als Grundverhalten),
+   * dann Accel und Gyro einschalten (je 104 Hz + Messbereich). */
   if (imu_lsm6dso_write_reg(board, LSM6DSO_REG_CTRL3_C, LSM6DSO_CTRL3_C_VAL) != APP_STATUS_OK ||
  8003a24:	2244      	movs	r2, #68	@ 0x44
  8003a26:	2112      	movs	r1, #18
@@ -8078,6 +8123,9 @@ app_status_t imu_lsm6dso_read(imu_data_t *data)
  8003b02:	e03c      	b.n	8003b7e <imu_lsm6dso_read+0xf6>
   }
 
+  /* Bytes zu 16-Bit-Werten zusammensetzen: Der Sensor liefert little-endian
+   * (niederwertiges Byte zuerst), Reihenfolge laut Registerkarte erst
+   * Gyro X/Y/Z, dann Accel X/Y/Z. rx[0] ist das Echo des Adressbytes. */
   data->gyro_x_raw = (int16_t)((uint16_t)rx[1] | ((uint16_t)rx[2] << 8));
  8003b04:	7b7b      	ldrb	r3, [r7, #13]
  8003b06:	b21a      	sxth	r2, r3
@@ -15902,6 +15950,10 @@ app_status_t storage_logger_init(void)
  8006c7c:	2200      	movs	r2, #0
  8006c7e:	701a      	strb	r2, [r3, #0]
 
+  /* Dateisystem mounten. Die "1" erzwingt das sofortige Einlesen der
+   * Verwaltungsstrukturen -- dabei ruft FatFS ueber diskio unsere
+   * SD-Initialisierung (sd_hw_init) auf. Schlaegt hier etwas fehl,
+   * fehlt meist die Karte oder sie ist exFAT- statt FAT32-formatiert. */
   res = f_mount(&storage_fs, "", 1);
  8006c80:	2201      	movs	r2, #1
  8006c82:	493e      	ldr	r1, [pc, #248]	@ (8006d7c <storage_logger_init+0x108>)
@@ -15924,7 +15976,8 @@ app_status_t storage_logger_init(void)
  8006ca6:	e063      	b.n	8006d70 <storage_logger_init+0xfc>
   }
 
-  /* Schreib-/Lesetest: Datei anlegen, Zeile schreiben, zuruecklesen. */
+  /* Selbsttest der kompletten Kette: Datei anlegen, Zeile schreiben,
+   * zuruecklesen und ausgeben -- beweist Schreiben UND Lesen. */
   res = f_open(&fil, "BRINGUP.TXT", FA_CREATE_ALWAYS | FA_WRITE);
  8006ca8:	220a      	movs	r2, #10
  8006caa:	4937      	ldr	r1, [pc, #220]	@ (8006d88 <storage_logger_init+0x114>)
@@ -16069,7 +16122,9 @@ app_status_t storage_logger_start(void)
  8006db8:	e050      	b.n	8006e5c <storage_logger_start+0xb4>
   }
 
-  /* Logdatei mit fortlaufender Nummer anlegen (nichts ueberschreiben). */
+  /* Logdatei mit fortlaufender Nummer anlegen: f_stat prueft, ob der Name
+   * schon existiert -- die erste freie Nummer gewinnt. So ueberschreibt
+   * ein Neustart niemals die Daten der vorigen Aufzeichnung. */
   unsigned int num = 0;
  8006dba:	2300      	movs	r3, #0
  8006dbc:	62fb      	str	r3, [r7, #44]	@ 0x2c
@@ -16255,8 +16310,9 @@ app_status_t storage_logger_write_sample(const app_sample_t *sample)
     return APP_STATUS_NOT_READY;
  8006ef8:	2302      	movs	r3, #2
  8006efa:	e075      	b.n	8006fe8 <storage_logger_write_sample+0x10c>
-  }
-
+   * zunaechst nur in den FatFS-RAM-Puffer (512 Byte = 1 Sektor); physisch
+   * auf die Karte geht es, wenn der Puffer voll ist oder f_sync es unten
+   * erzwingt. */
   int written = f_printf(&storage_log_file,
                          "%lu;%d;%ld;%ld;%lu;%lu;%u;%u;%d;%d;%d;%d;%d;%d;%d;%d;%d\n",
                          (unsigned long)sample->timestamp_ms,
@@ -16373,6 +16429,9 @@ app_status_t storage_logger_write_sample(const app_sample_t *sample)
  8006fae:	e01b      	b.n	8006fe8 <storage_logger_write_sample+0x10c>
   }
 
+  /* Alle 25 Zeilen (~0,5 s bei 50 Hz) Puffer und Dateisystem-Verwaltung
+   * auf die Karte schreiben: begrenzt den Datenverlust bei ploetzlichem
+   * Stromausfall auf etwa eine halbe Sekunde. */
   if (++storage_sample_count % STORAGE_SYNC_EVERY_N_SAMPLES == 0u)
  8006fb0:	4b12      	ldr	r3, [pc, #72]	@ (8006ffc <storage_logger_write_sample+0x120>)
  8006fb2:	681b      	ldr	r3, [r3, #0]

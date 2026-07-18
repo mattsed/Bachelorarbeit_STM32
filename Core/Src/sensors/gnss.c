@@ -185,9 +185,12 @@ app_status_t gnss_init(void)
 
   gnss_ready = false;
 
+  /* Schritt 1: die beiden GPIOs als Open-Drain-I2C-Leitungen aufsetzen. */
   gnss_i2c_pins_init();
 
-  /* Erreichbarkeit pruefen (Adress-ACK). */
+  /* Schritt 2: Erreichbarkeit pruefen. Ein Adressbyte senden und schauen,
+   * ob der Teseo mit ACK antwortet (SDA im 9. Takt auf low zieht) --
+   * beweist Versorgung, Verdrahtung und Adresse in einem. */
   gnss_i2c_start();
   bool present = gnss_i2c_write_byte((uint8_t)(GNSS_I2C_ADDR << 1));
   gnss_i2c_stop();
@@ -197,7 +200,9 @@ app_status_t gnss_init(void)
     return APP_STATUS_ERROR;
   }
 
-  /* NMEA-Strom einsammeln (das Modul sendet im Sekundentakt). */
+  /* Schritt 3: nachweisen, dass wirklich NMEA-Saetze kommen (mindestens
+   * ein "$G"-Satzanfang). Das Modul sendet im Sekundentakt; direkt nach
+   * einem Board-Reset bootet es selbst neu, daher das grosse Zeitfenster. */
   uint32_t start = HAL_GetTick();
   while ((HAL_GetTick() - start) < GNSS_COLLECT_TIMEOUT_MS)
   {
@@ -362,7 +367,10 @@ static void gnss_parse_rmc(const char *line)
   }
 }
 
-/* Verarbeitet ein einzelnes Zeichen aus dem NMEA-Strom. */
+/* Verarbeitet ein einzelnes Zeichen aus dem NMEA-Strom.
+ * Arbeitsweise wie eine kleine Zustandsmaschine: '$' beginnt eine neue
+ * Zeile, Zeilenende (\r oder \n) schliesst sie ab und stoesst die
+ * Auswertung an, alles dazwischen wird gesammelt. */
 static void gnss_feed_char(char c)
 {
   if (c == '$')

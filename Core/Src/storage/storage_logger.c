@@ -448,6 +448,10 @@ app_status_t storage_logger_init(void)
 
   storage_logger_ready = false;
 
+  /* Dateisystem mounten. Die "1" erzwingt das sofortige Einlesen der
+   * Verwaltungsstrukturen -- dabei ruft FatFS ueber diskio unsere
+   * SD-Initialisierung (sd_hw_init) auf. Schlaegt hier etwas fehl,
+   * fehlt meist die Karte oder sie ist exFAT- statt FAT32-formatiert. */
   res = f_mount(&storage_fs, "", 1);
   if (res != FR_OK)
   {
@@ -455,7 +459,8 @@ app_status_t storage_logger_init(void)
     return APP_STATUS_ERROR;
   }
 
-  /* Schreib-/Lesetest: Datei anlegen, Zeile schreiben, zuruecklesen. */
+  /* Selbsttest der kompletten Kette: Datei anlegen, Zeile schreiben,
+   * zuruecklesen und ausgeben -- beweist Schreiben UND Lesen. */
   res = f_open(&fil, "BRINGUP.TXT", FA_CREATE_ALWAYS | FA_WRITE);
   if (res != FR_OK)
   {
@@ -497,7 +502,9 @@ app_status_t storage_logger_start(void)
     return APP_STATUS_OK; /* laeuft bereits */
   }
 
-  /* Logdatei mit fortlaufender Nummer anlegen (nichts ueberschreiben). */
+  /* Logdatei mit fortlaufender Nummer anlegen: f_stat prueft, ob der Name
+   * schon existiert -- die erste freie Nummer gewinnt. So ueberschreibt
+   * ein Neustart niemals die Daten der vorigen Aufzeichnung. */
   unsigned int num = 0;
   for (; num < 1000u; ++num)
   {
@@ -554,6 +561,10 @@ app_status_t storage_logger_write_sample(const app_sample_t *sample)
     return APP_STATUS_NOT_READY;
   }
 
+  /* Einen Messdatensatz als Semikolon-Zeile anhaengen. f_printf schreibt
+   * zunaechst nur in den FatFS-RAM-Puffer (512 Byte = 1 Sektor); physisch
+   * auf die Karte geht es, wenn der Puffer voll ist oder f_sync es unten
+   * erzwingt. */
   int written = f_printf(&storage_log_file,
                          "%lu;%d;%ld;%ld;%lu;%lu;%u;%u;%d;%d;%d;%d;%d;%d;%d;%d;%d\n",
                          (unsigned long)sample->timestamp_ms,
@@ -573,6 +584,9 @@ app_status_t storage_logger_write_sample(const app_sample_t *sample)
     return APP_STATUS_ERROR;
   }
 
+  /* Alle 25 Zeilen (~0,5 s bei 50 Hz) Puffer und Dateisystem-Verwaltung
+   * auf die Karte schreiben: begrenzt den Datenverlust bei ploetzlichem
+   * Stromausfall auf etwa eine halbe Sekunde. */
   if (++storage_sample_count % STORAGE_SYNC_EVERY_N_SAMPLES == 0u)
   {
     if (f_sync(&storage_log_file) != FR_OK)
