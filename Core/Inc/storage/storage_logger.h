@@ -26,8 +26,12 @@ app_status_t storage_logger_start(void);
  * mounten, neue Logdatei anlegen. */
 app_status_t storage_logger_recover(void);
 
-/* Meldet, ob der Logger bereit ist, Daten dauerhaft zu speichern. */
+/* Meldet, ob gerade eine Aufzeichnung laeuft. */
 bool storage_logger_is_ready(void);
+
+/* Meldet, ob die Karte gemountet und der Logger startbereit ist
+ * (unabhaengig davon, ob gerade aufgezeichnet wird). */
+bool storage_logger_is_available(void);
 
 #ifdef __cplusplus
 }

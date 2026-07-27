@@ -68,13 +68,13 @@ static void app_watchdog_start(void)
   printf("[App] Watchdog aktiv (Reset nach ~4 s ohne Lebenszeichen).\r\n");
 }
 
-/* B1-USER-Knopf (PC13): STOPPT die Aufzeichnung -- endgueltig bis zum
- * naechsten Reset. Eine neue Aufzeichnung beginnt bewusst NUR ueber den
- * schwarzen RESET-Knopf: Das startet die Firmware komplett neu (neue
- * LOG_nnn.CSV, frische Gyro-Bias-Kalibrierung) und macht die Bedienung
- * eindeutig -- ein versehentlicher zweiter B1-Druck kann nicht mitten am
- * Schreibtisch eine Muell-Aufzeichnung beginnen. Ausgewertet wird der
- * entprellte Wechsel auf "gedrueckt" (Pegel high). */
+/* B1-USER-Knopf (PC13): STARTET die Aufzeichnung. Nach dem Einschalten
+ * bzw. Kartenstecken ist der Logger nur BEREIT (LED dauerhaft an) --
+ * es wird erst geloggt, wenn wirklich B1 gedrueckt wurde. Gestoppt wird
+ * mit dem anderen Knopf: Der schwarze RESET beendet die Aufzeichnung
+ * und bootet zurueck in den Bereit-Zustand. Waehrend der Aufzeichnung
+ * macht B1 bewusst nichts (kein versehentlicher Stopp am Lenker).
+ * Ausgewertet wird der entprellte Wechsel auf "gedrueckt" (Pegel high). */
 static void app_check_user_button(void)
 {
   static GPIO_PinState stable_state = GPIO_PIN_RESET;
@@ -105,16 +105,22 @@ static void app_check_user_button(void)
    * (das Loslassen selbst loest nichts aus). */
   if (stable_state == GPIO_PIN_SET) /* Knopf gedrueckt */
   {
-    if (storage_logger_is_ready() || app_sd_error)
+    if (app_sd_error)
     {
-      /* Stopp gewinnt auch im Fehlerfall: Fehlerzustand verwerfen, damit
-       * die automatische Wiederherstellung das Logging nicht gegen den
-       * Willen des Nutzers wieder anwirft. */
+      /* Im Fehlerfall bricht B1 die Wiederherstellungsversuche ab und
+       * kehrt in den Bereit-Zustand zurueck. */
       app_sd_error = false;
       (void)storage_logger_stop();
-      printf("[App] Gestoppt per B1 -- neue Aufzeichnung per RESET-Knopf.\r\n");
+      printf("[App] Fehlerzustand verworfen -- bereit (Start per B1).\r\n");
     }
-    /* Im gestoppten Zustand macht B1 nichts (Neustart nur per RESET). */
+    else if (!storage_logger_is_ready())
+    {
+      if (storage_logger_start() == APP_STATUS_OK)
+      {
+        printf("[App] Aufzeichnung gestartet -- Stopp per RESET-Knopf.\r\n");
+      }
+    }
+    /* Waehrend laufender Aufzeichnung macht B1 nichts (Stopp per RESET). */
   }
 }
 
@@ -140,9 +146,10 @@ app_status_t app_init(void)
   (void)storage_logger_init();
   (void)ble_bluenrg_init();
 
-  if (storage_logger_is_ready())
+  if (storage_logger_is_available())
   {
-    printf("[App] Messzyklus laeuft (%u Hz).\r\n", (unsigned int)(1000u / APP_SAMPLE_PERIOD_MS));
+    printf("[App] Bereit (%u Hz) -- Aufzeichnung mit B1 starten, Stopp per RESET.\r\n",
+           (unsigned int)(1000u / APP_SAMPLE_PERIOD_MS));
   }
   else
   {

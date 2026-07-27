@@ -435,7 +435,8 @@ DWORD get_fattime(void)
 
 static FATFS storage_fs;
 static FIL storage_log_file;
-static bool storage_logger_ready = false;
+static bool storage_logger_ready = false;   /* true = Aufzeichnung laeuft */
+static bool storage_available = false;      /* true = Karte gemountet, startbereit */
 static uint32_t storage_sample_count = 0;
 
 /* Alle N Datensaetze auf die Karte synchronisieren: begrenzt den Datenverlust
@@ -490,7 +491,12 @@ app_status_t storage_logger_init(void)
   line[strcspn(line, "\r\n")] = '\0';
   printf("[microSD] FatFS ok, BRINGUP.TXT: \"%s\"\r\n", line);
 
-  return storage_logger_start();
+  /* Bewusst KEIN automatischer Aufzeichnungsstart mehr: Karte stecken /
+   * einschalten macht den Logger nur bereit; die Aufzeichnung beginnt
+   * erst per B1-Knopf (siehe app.c). */
+  storage_available = true;
+  printf("[microSD] bereit -- Aufzeichnung mit B1 starten.\r\n");
+  return APP_STATUS_OK;
 }
 
 app_status_t storage_logger_start(void)
@@ -650,4 +656,9 @@ app_status_t storage_logger_write_sample(const app_sample_t *sample)
 bool storage_logger_is_ready(void)
 {
   return storage_logger_ready;
+}
+
+bool storage_logger_is_available(void)
+{
+  return storage_available;
 }
