@@ -68,8 +68,13 @@ static void app_watchdog_start(void)
   printf("[App] Watchdog aktiv (Reset nach ~4 s ohne Lebenszeichen).\r\n");
 }
 
-/* B1-USER-Knopf (PC13): stoppt bzw. startet die Aufzeichnung. Ausgewertet
- * wird der entprellte Wechsel auf "gedrueckt" (Pegel high). */
+/* B1-USER-Knopf (PC13): STOPPT die Aufzeichnung -- endgueltig bis zum
+ * naechsten Reset. Eine neue Aufzeichnung beginnt bewusst NUR ueber den
+ * schwarzen RESET-Knopf: Das startet die Firmware komplett neu (neue
+ * LOG_nnn.CSV, frische Gyro-Bias-Kalibrierung) und macht die Bedienung
+ * eindeutig -- ein versehentlicher zweiter B1-Druck kann nicht mitten am
+ * Schreibtisch eine Muell-Aufzeichnung beginnen. Ausgewertet wird der
+ * entprellte Wechsel auf "gedrueckt" (Pegel high). */
 static void app_check_user_button(void)
 {
   static GPIO_PinState stable_state = GPIO_PIN_RESET;
@@ -107,11 +112,9 @@ static void app_check_user_button(void)
        * Willen des Nutzers wieder anwirft. */
       app_sd_error = false;
       (void)storage_logger_stop();
+      printf("[App] Gestoppt per B1 -- neue Aufzeichnung per RESET-Knopf.\r\n");
     }
-    else
-    {
-      (void)storage_logger_start();
-    }
+    /* Im gestoppten Zustand macht B1 nichts (Neustart nur per RESET). */
   }
 }
 
