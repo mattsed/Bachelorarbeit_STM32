@@ -40,13 +40,55 @@
  * liefern kann. */
 static bool gnss_ready = false;
 
-/* Setzt I2C1 auf PB8/PB9 auf: Kernel-Takt CSI waehlen, Pins auf die
- * Alternativfunktion schalten (I2C ist Open-Drain mit Pull-ups), dann das
- * Peripheral mit dem berechneten Timing einschalten. */
+/* Befreit einen haengenden I2C-Bus. Wird der MCU mitten in einer laufenden
+ * Uebertragung resettet, haelt der Teseo SDA auf low und wartet auf
+ * Taktflanken -- das Peripheral koennte dann nie eine Start-Bedingung
+ * erzeugen. Abhilfe laut I2C-Spezifikation: die Pins kurz als GPIO
+ * betreiben, bis zu 9 Taktpulse auf SCL geben, bis SDA wieder frei ist,
+ * und mit einer Stop-Bedingung abschliessen. */
+static void gnss_i2c_bus_clear(void)
+{
+  GPIO_InitTypeDef gpio = { 0 };
+
+  __HAL_RCC_GPIOB_CLK_ENABLE();
+  gpio.Pin = GNSS_SCL_PIN | GNSS_SDA_PIN;
+  gpio.Mode = GPIO_MODE_OUTPUT_OD;
+  gpio.Pull = GPIO_PULLUP;
+  gpio.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOB, &gpio);
+  HAL_GPIO_WritePin(GPIOB, GNSS_SCL_PIN, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(GPIOB, GNSS_SDA_PIN, GPIO_PIN_SET);
+  HAL_Delay(1);
+
+  for (int i = 0; i < 9; ++i)
+  {
+    if (HAL_GPIO_ReadPin(GPIOB, GNSS_SDA_PIN) == GPIO_PIN_SET)
+    {
+      break; /* Bus ist frei */
+    }
+    HAL_GPIO_WritePin(GPIOB, GNSS_SCL_PIN, GPIO_PIN_RESET);
+    HAL_Delay(1);
+    HAL_GPIO_WritePin(GPIOB, GNSS_SCL_PIN, GPIO_PIN_SET);
+    HAL_Delay(1);
+  }
+
+  /* Stop-Bedingung: SDA-Flanke low -> high, waehrend SCL high ist. */
+  HAL_GPIO_WritePin(GPIOB, GNSS_SDA_PIN, GPIO_PIN_RESET);
+  HAL_Delay(1);
+  HAL_GPIO_WritePin(GPIOB, GNSS_SDA_PIN, GPIO_PIN_SET);
+  HAL_Delay(1);
+}
+
+/* Setzt I2C1 auf PB8/PB9 auf: erst einen evtl. haengenden Bus befreien,
+ * dann Kernel-Takt CSI waehlen, Pins auf die Alternativfunktion schalten
+ * (I2C ist Open-Drain mit Pull-ups) und das Peripheral mit dem
+ * berechneten Timing einschalten. */
 static app_status_t gnss_i2c_hw_init(void)
 {
   RCC_PeriphCLKInitTypeDef clk = { 0 };
   GPIO_InitTypeDef gpio = { 0 };
+
+  gnss_i2c_bus_clear();
 
   clk.PeriphClockSelection = RCC_PERIPHCLK_I2C1;
   clk.I2c1ClockSelection = RCC_I2C1CLKSOURCE_CSI;
@@ -85,6 +127,18 @@ static bool gnss_i2c_wait_flag(uint32_t flag)
   return true;
 }
 
+/* Setzt das I2C1-Peripheral nach einem Timeout zurueck (PE aus/ein):
+ * loescht einen evtl. haengengebliebenen, angefangenen Transfer. */
+static void gnss_i2c_reset_peripheral(void)
+{
+  I2C1->CR1 = 0;
+  for (volatile int i = 0; i < 100; ++i)
+  {
+    __NOP(); /* PE muss einige Takte low bleiben (Referenzhandbuch) */
+  }
+  I2C1->CR1 = I2C_CR1_PE;
+}
+
 /* Prueft per leerem Schreibzugriff, ob der Teseo mit ACK antwortet --
  * beweist Versorgung, Verdrahtung und Adresse in einem. */
 static bool gnss_i2c_probe(void)
@@ -93,6 +147,7 @@ static bool gnss_i2c_probe(void)
   I2C1->CR2 = ((uint32_t)GNSS_I2C_ADDR << 1) | I2C_CR2_AUTOEND | I2C_CR2_START;
   if (!gnss_i2c_wait_flag(I2C_ISR_STOPF))
   {
+    gnss_i2c_reset_peripheral();
     return false;
   }
   bool ack = ((I2C1->ISR & I2C_ISR_NACKF) == 0u);
@@ -116,8 +171,10 @@ static uint32_t gnss_i2c_read_chunk(uint8_t *dst, uint32_t max)
   {
     if (!gnss_i2c_wait_flag(I2C_ISR_RXNE))
     {
-      /* NACK oder haengender Bus: abbrechen, bisherige Bytes behalten. */
+      /* NACK oder haengender Bus: Peripheral zuruecksetzen, damit der
+       * naechste Poll sauber startet; bisherige Bytes behalten. */
       I2C1->ICR = I2C_ICR_STOPCF | I2C_ICR_NACKCF;
+      gnss_i2c_reset_peripheral();
       return n;
     }
     uint8_t b = (uint8_t)I2C1->RXDR;
@@ -165,8 +222,20 @@ app_status_t gnss_init(void)
     return APP_STATUS_ERROR;
   }
 
-  /* Schritt 2: Erreichbarkeit pruefen (ACK auf die Adresse). */
-  if (!gnss_i2c_probe())
+  /* Schritt 2: Erreichbarkeit pruefen (ACK auf die Adresse). Nach einem
+   * echten Kalt-Einschalten (Powerbank!) braucht der Teseo bis zu ~2 s,
+   * bis er auf I2C antwortet -- deshalb bis zu 3 s lang wiederholen
+   * statt nur einmal zu fragen. */
+  bool present = false;
+  for (int attempt = 0; attempt < 30 && !present; ++attempt)
+  {
+    present = gnss_i2c_probe();
+    if (!present)
+    {
+      HAL_Delay(100);
+    }
+  }
+  if (!present)
   {
     printf("[GNSS] Teseo antwortet nicht auf I2C-Adresse 0x%02X.\r\n", GNSS_I2C_ADDR);
     return APP_STATUS_ERROR;
