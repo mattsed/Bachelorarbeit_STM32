@@ -4,7 +4,9 @@
 #include <string.h>
 
 #include "board/board.h"
+#include "sensors/acc_adxl373.h"
 #include "sensors/gnss.h"
+#include "sensors/imu_lsm6dso.h"
 
 #include "ff.h"
 #include "diskio.h"
@@ -520,6 +522,15 @@ app_status_t storage_logger_start(void)
     printf("[microSD] Logdatei %s liess sich nicht anlegen (FRESULT=%d).\r\n", name, (int)res);
     return APP_STATUS_ERROR;
   }
+  /* Beim Start gemessenen Gyro-Bias als Kommentarzeile in den Dateikopf --
+   * die Messwerte in den Spalten bleiben Rohwerte, die PC-Auswertung liest
+   * diese Zeile und zieht den Bias dort ab. */
+  int16_t bias_x = 0, bias_y = 0, bias_z = 0;
+  if (imu_lsm6dso_get_gyro_bias(&bias_x, &bias_y, &bias_z))
+  {
+    f_printf(&storage_log_file, "# gyro_bias;%d;%d;%d\n",
+             (int)bias_x, (int)bias_y, (int)bias_z);
+  }
   f_puts("t_ms;fix;lat_e7;lon_e7;v_mm_s;utc_ms;"
          "p_vorne_raw;p_hinten_raw;"
          "imu_ax;imu_ay;imu_az;imu_gx;imu_gy;imu_gz;"
@@ -530,6 +541,12 @@ app_status_t storage_logger_start(void)
     return APP_STATUS_ERROR;
   }
   printf("[microSD] Logdatei %s angelegt, Aufzeichnung laeuft.\r\n", name);
+
+  /* MAXPEAK-Register des ADXL373 durch einmaliges Lesen zuruecksetzen --
+   * so beziehen sich die beim Stopp ausgegebenen Spitzenwerte genau auf
+   * diese Aufzeichnung. */
+  int16_t discard_x, discard_y, discard_z;
+  (void)acc_adxl373_read_peaks(&discard_x, &discard_y, &discard_z);
 
   storage_sample_count = 0;
   storage_logger_ready = true;
@@ -551,7 +568,40 @@ app_status_t storage_logger_stop(void)
   }
   printf("[microSD] Aufzeichnung gestoppt, Datei geschlossen (%lu Datensaetze).\r\n",
          (unsigned long)storage_sample_count);
+
+  /* Spitzenwerte der Fahrt ausgeben: Der ADXL373 haelt sie intern mit
+   * seiner vollen 400-Hz-Rate fest -- er sieht also auch kurze Stoesse,
+   * die zwischen zwei 50-Hz-Abtastungen der CSV liegen. 1 LSB = 200 mg,
+   * Ausgabe ganzzahlig in Milli-g (newlib-nano kann kein %f). */
+  int16_t peak_x = 0, peak_y = 0, peak_z = 0;
+  if (acc_adxl373_read_peaks(&peak_x, &peak_y, &peak_z) == APP_STATUS_OK)
+  {
+    printf("[ADXL373] Spitzen der Aufzeichnung: X=%ld  Y=%ld  Z=%ld mg\r\n",
+           (long)peak_x * 200, (long)peak_y * 200, (long)peak_z * 200);
+  }
   return APP_STATUS_OK;
+}
+
+app_status_t storage_logger_recover(void)
+{
+  storage_logger_ready = false;
+
+  /* Alte Handles verwerfen. Nach einem Kartenzug sind Datei- und
+   * Mount-Zustand ohnehin ungueltig -- Fehler hier sind erwartet. */
+  (void)f_close(&storage_log_file);
+  (void)f_mount(NULL, "", 0);
+
+  /* Kartentyp zuruecksetzen: disk_initialize fuehrt die Hardware-
+   * Initialisierung (sd_hw_init) nur bei SD_CARD_NONE erneut aus.
+   * Ohne diesen Reset wuerde eine neu gesteckte Karte im alten,
+   * ungueltigen Zustand angesprochen. */
+  sd_card_type = SD_CARD_NONE;
+
+  if (f_mount(&storage_fs, "", 1) != FR_OK)
+  {
+    return APP_STATUS_ERROR;
+  }
+  return storage_logger_start(); /* legt die naechste freie LOG_nnn.CSV an */
 }
 
 app_status_t storage_logger_write_sample(const app_sample_t *sample)

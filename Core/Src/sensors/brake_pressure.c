@@ -16,6 +16,16 @@
 #define BRAKE_SENSOR_V_PER_BAR 0.028571f
 #define BRAKE_AVG_SAMPLES     8u
 
+/* Kabelbruch-/Fehlererkennung: Der PSS-140 liefert im gesunden Betrieb
+ * immer 0,5..4,725 V (10..90 % der Versorgung, ratiometrisch). Spannungen
+ * deutlich darunter bedeuten: Signalleitung ab oder Versorgung fehlt
+ * (der ADC-Pin schwebt Richtung GND); deutlich darueber: Kurzschluss zur
+ * Versorgung oder Sensor uebersteuert. Warnung hoechstens alle 5 s, damit
+ * die Konsole im Dauerfehler lesbar bleibt. */
+#define BRAKE_FAULT_LOW_V     0.35f
+#define BRAKE_FAULT_HIGH_V    4.75f
+#define BRAKE_WARN_PERIOD_MS  5000u
+
 /* Wird true, sobald die ADC-Kanaele fuer die Bremsdrucksensoren bereit sind. */
 static bool brake_pressure_ready = false;
 
@@ -35,6 +45,39 @@ static float brake_raw_to_bar(uint16_t raw, float *sensor_volt)
     return 0.0f;
   }
   return (u_sensor - BRAKE_SENSOR_OFFSET_V) / BRAKE_SENSOR_V_PER_BAR;
+}
+
+/* Prueft beide Sensorspannungen auf Plausibilitaet und warnt ratenbegrenzt.
+ * Die Messwerte werden trotzdem geloggt (Rohwerte stehen in der CSV) --
+ * die Auswertung am PC verwirft unplausible Werte dann als NaN. */
+static void brake_check_plausibility(float u_front, float u_back)
+{
+  static uint32_t next_warn_ms = 0;
+
+  bool front_ok = (u_front >= BRAKE_FAULT_LOW_V) && (u_front <= BRAKE_FAULT_HIGH_V);
+  bool back_ok  = (u_back >= BRAKE_FAULT_LOW_V) && (u_back <= BRAKE_FAULT_HIGH_V);
+  if (front_ok && back_ok)
+  {
+    return;
+  }
+
+  uint32_t now = HAL_GetTick();
+  if (now < next_warn_ms)
+  {
+    return;
+  }
+  next_warn_ms = now + BRAKE_WARN_PERIOD_MS;
+
+  if (!front_ok)
+  {
+    printf("[Bremsdruck] WARNUNG vorne: U_Sensor=%d mV unplausibel (Kabelbruch/Kurzschluss?).\r\n",
+           (int)(u_front * 1000.0f));
+  }
+  if (!back_ok)
+  {
+    printf("[Bremsdruck] WARNUNG hinten: U_Sensor=%d mV unplausibel (Kabelbruch/Kurzschluss?).\r\n",
+           (int)(u_back * 1000.0f));
+  }
 }
 
 /* Fuehrt einen Scan ueber beide Kanaele aus (Rank 1 = PA0/vorne,
@@ -110,6 +153,9 @@ app_status_t brake_pressure_init(void)
          back_raw, (int)(back_volt * 1000.0f),
          (int)back_bar, (int)(back_bar * 10.0f) % 10);
 
+  /* Schon beim Start auffaellige Verdrahtungsfehler melden. */
+  brake_check_plausibility(front_volt, back_volt);
+
   brake_pressure_ready = true;
   return APP_STATUS_OK;
 }
@@ -127,8 +173,11 @@ app_status_t brake_pressure_read(brake_pressure_data_t *data)
   {
     return APP_STATUS_ERROR;
   }
-  data->front_bar = brake_raw_to_bar(data->front_raw, NULL);
-  data->back_bar = brake_raw_to_bar(data->back_raw, NULL);
+  float u_front = 0.0f;
+  float u_back = 0.0f;
+  data->front_bar = brake_raw_to_bar(data->front_raw, &u_front);
+  data->back_bar = brake_raw_to_bar(data->back_raw, &u_back);
+  brake_check_plausibility(u_front, u_back);
   return APP_STATUS_OK;
 }
 

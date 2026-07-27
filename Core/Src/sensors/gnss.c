@@ -10,11 +10,27 @@
  * kann direkt per I2C-Read gelesen werden; solange keine Daten anstehen,
  * liefert das Modul 0xFF-Fuellbytes.
  *
- * Fuer das Bring-up genuegt Software-I2C auf PB8/PB9 (Open-Drain, interne
- * Pull-ups); spaeter kann das auf das I2C1-Peripheral umgestellt werden. */
+ * Seit dem Bring-up vom anfaenglichen Software-I2C (Bit-Banging: Pins per
+ * Code von Hand takten) auf das Hardware-I2C1-Peripheral umgestellt:
+ * dieselben Pins PB8/PB9 gehoeren als Alternativfunktion AF4 zu I2C1, das
+ * das Protokoll selbststaendig abwickelt. Vorteil: ~380 kHz Bustakt statt
+ * des langsamen Bit-Bangings -- pro 32-Byte-Block wartet die CPU nur noch
+ * ~1 ms, damit erreicht die Messschleife die vollen 50 Hz.
+ *
+ * Direkte Registerzugriffe statt HAL-I2C, weil das I2C-HAL-Modul im
+ * CubeMX-Projekt deaktiviert ist und eine Aktivierung in
+ * stm32h5xx_hal_conf.h bei der naechsten Code-Generierung verloren ginge.
+ * Kernel-Takt: CSI (4 MHz) -- unabhaengig von der APB-Konfiguration,
+ * gleiche Strategie wie bei LPUART1 und der SD-Initialisierung. */
 #define GNSS_I2C_ADDR           0x3Au
 #define GNSS_SCL_PIN            GPIO_PIN_8
 #define GNSS_SDA_PIN            GPIO_PIN_9
+
+/* TIMINGR fuer 4-MHz-Kerneltakt: PRESC=0, SCLL=5 (1,5 us low), SCLH=2
+ * (0,75 us high), SCLDEL=1, SDADEL=1 -> ca. 380 kHz (Fast-Mode). */
+#define GNSS_I2C_TIMINGR        0x00110205u
+#define GNSS_I2C_FLAG_TIMEOUT_MS 5u
+#define GNSS_I2C_CHUNK          32u
 /* Grosszuegig bemessen: nach einem Board-Reset bootet auch der Teseo neu
  * (Reset-Netz der Shields) und braucht 1..2 s, bis NMEA wieder laeuft. */
 #define GNSS_COLLECT_TIMEOUT_MS 6000u
@@ -24,137 +40,94 @@
  * liefern kann. */
 static bool gnss_ready = false;
 
-static void gnss_i2c_delay(void)
+/* Setzt I2C1 auf PB8/PB9 auf: Kernel-Takt CSI waehlen, Pins auf die
+ * Alternativfunktion schalten (I2C ist Open-Drain mit Pull-ups), dann das
+ * Peripheral mit dem berechneten Timing einschalten. */
+static app_status_t gnss_i2c_hw_init(void)
 {
-  for (volatile uint32_t i = 0; i < 400u; ++i)
-  {
-    __NOP();
-  }
-}
-
-static void gnss_i2c_scl(int high)
-{
-  HAL_GPIO_WritePin(GPIOB, GNSS_SCL_PIN, high ? GPIO_PIN_SET : GPIO_PIN_RESET);
-}
-
-static void gnss_i2c_sda(int high)
-{
-  HAL_GPIO_WritePin(GPIOB, GNSS_SDA_PIN, high ? GPIO_PIN_SET : GPIO_PIN_RESET);
-}
-
-static int gnss_i2c_sda_read(void)
-{
-  return (HAL_GPIO_ReadPin(GPIOB, GNSS_SDA_PIN) == GPIO_PIN_SET) ? 1 : 0;
-}
-
-static void gnss_i2c_start(void)
-{
-  gnss_i2c_sda(1);
-  gnss_i2c_scl(1);
-  gnss_i2c_delay();
-  gnss_i2c_sda(0);
-  gnss_i2c_delay();
-  gnss_i2c_scl(0);
-  gnss_i2c_delay();
-}
-
-static void gnss_i2c_stop(void)
-{
-  gnss_i2c_sda(0);
-  gnss_i2c_delay();
-  gnss_i2c_scl(1);
-  gnss_i2c_delay();
-  gnss_i2c_sda(1);
-  gnss_i2c_delay();
-}
-
-/* Schreibt ein Byte; Rueckgabe true, wenn der Slave mit ACK antwortet. */
-static bool gnss_i2c_write_byte(uint8_t byte)
-{
-  for (int i = 7; i >= 0; --i)
-  {
-    gnss_i2c_sda((byte >> i) & 1u);
-    gnss_i2c_delay();
-    gnss_i2c_scl(1);
-    gnss_i2c_delay();
-    gnss_i2c_scl(0);
-    gnss_i2c_delay();
-  }
-
-  gnss_i2c_sda(1);
-  gnss_i2c_delay();
-  gnss_i2c_scl(1);
-  gnss_i2c_delay();
-  bool ack = (gnss_i2c_sda_read() == 0);
-  gnss_i2c_scl(0);
-  gnss_i2c_delay();
-  return ack;
-}
-
-/* Liest ein Byte; ack=true sendet Master-ACK (weitere Bytes folgen). */
-static uint8_t gnss_i2c_read_byte(bool ack)
-{
-  uint8_t byte = 0;
-
-  gnss_i2c_sda(1); /* SDA freigeben */
-  for (int i = 7; i >= 0; --i)
-  {
-    gnss_i2c_delay();
-    gnss_i2c_scl(1);
-    gnss_i2c_delay();
-    if (gnss_i2c_sda_read())
-    {
-      byte |= (uint8_t)(1u << i);
-    }
-    gnss_i2c_scl(0);
-  }
-
-  gnss_i2c_sda(ack ? 0 : 1);
-  gnss_i2c_delay();
-  gnss_i2c_scl(1);
-  gnss_i2c_delay();
-  gnss_i2c_scl(0);
-  gnss_i2c_sda(1);
-  gnss_i2c_delay();
-  return byte;
-}
-
-static void gnss_i2c_pins_init(void)
-{
+  RCC_PeriphCLKInitTypeDef clk = { 0 };
   GPIO_InitTypeDef gpio = { 0 };
+
+  clk.PeriphClockSelection = RCC_PERIPHCLK_I2C1;
+  clk.I2c1ClockSelection = RCC_I2C1CLKSOURCE_CSI;
+  if (HAL_RCCEx_PeriphCLKConfig(&clk) != HAL_OK)
+  {
+    return APP_STATUS_ERROR;
+  }
+  __HAL_RCC_I2C1_CLK_ENABLE();
 
   __HAL_RCC_GPIOB_CLK_ENABLE();
   gpio.Pin = GNSS_SCL_PIN | GNSS_SDA_PIN;
-  gpio.Mode = GPIO_MODE_OUTPUT_OD;
+  gpio.Mode = GPIO_MODE_AF_OD;
   gpio.Pull = GPIO_PULLUP;
   gpio.Speed = GPIO_SPEED_FREQ_LOW;
+  gpio.Alternate = GPIO_AF4_I2C1;
   HAL_GPIO_Init(GPIOB, &gpio);
-  gnss_i2c_scl(1);
-  gnss_i2c_sda(1);
-  gnss_i2c_delay();
+
+  I2C1->CR1 = 0;                     /* aus waehrend der Konfiguration */
+  I2C1->TIMINGR = GNSS_I2C_TIMINGR;
+  I2C1->CR1 = I2C_CR1_PE;            /* einschalten (Analogfilter default an) */
+  return APP_STATUS_OK;
+}
+
+/* Wartet auf ein Statusflag des I2C1; false bei Timeout (Bus tot/haengt). */
+static bool gnss_i2c_wait_flag(uint32_t flag)
+{
+  uint32_t start = HAL_GetTick();
+
+  while ((I2C1->ISR & flag) == 0u)
+  {
+    if ((HAL_GetTick() - start) > GNSS_I2C_FLAG_TIMEOUT_MS)
+    {
+      return false;
+    }
+  }
+  return true;
+}
+
+/* Prueft per leerem Schreibzugriff, ob der Teseo mit ACK antwortet --
+ * beweist Versorgung, Verdrahtung und Adresse in einem. */
+static bool gnss_i2c_probe(void)
+{
+  I2C1->ICR = I2C_ICR_STOPCF | I2C_ICR_NACKCF;
+  I2C1->CR2 = ((uint32_t)GNSS_I2C_ADDR << 1) | I2C_CR2_AUTOEND | I2C_CR2_START;
+  if (!gnss_i2c_wait_flag(I2C_ISR_STOPF))
+  {
+    return false;
+  }
+  bool ack = ((I2C1->ISR & I2C_ISR_NACKF) == 0u);
+  I2C1->ICR = I2C_ICR_STOPCF | I2C_ICR_NACKCF;
+  return ack;
 }
 
 /* Liest einen Block NMEA-Bytes vom Teseo; 0xFF-Fuellbytes werden verworfen.
- * Rueckgabe: Anzahl uebernommener Nutzbytes. */
+ * Rueckgabe: Anzahl uebernommener Nutzbytes. Das Peripheral wickelt Start,
+ * Adressierung, ACKs und Stop selbststaendig ab (AUTOEND); die CPU holt nur
+ * jedes fertige Byte aus dem Empfangsregister (RXNE-Flag). */
 static uint32_t gnss_i2c_read_chunk(uint8_t *dst, uint32_t max)
 {
   uint32_t n = 0;
 
-  gnss_i2c_start();
-  if (!gnss_i2c_write_byte((uint8_t)((GNSS_I2C_ADDR << 1) | 1u)))
+  I2C1->ICR = I2C_ICR_STOPCF | I2C_ICR_NACKCF;
+  I2C1->CR2 = ((uint32_t)GNSS_I2C_ADDR << 1) | I2C_CR2_RD_WRN |
+              (GNSS_I2C_CHUNK << I2C_CR2_NBYTES_Pos) |
+              I2C_CR2_AUTOEND | I2C_CR2_START;
+  for (uint32_t i = 0; i < GNSS_I2C_CHUNK; ++i)
   {
-    gnss_i2c_stop();
-    return 0;
-  }
-  for (uint32_t i = 0; i < 32u; ++i)
-  {
-    uint8_t b = gnss_i2c_read_byte(i < 31u);
+    if (!gnss_i2c_wait_flag(I2C_ISR_RXNE))
+    {
+      /* NACK oder haengender Bus: abbrechen, bisherige Bytes behalten. */
+      I2C1->ICR = I2C_ICR_STOPCF | I2C_ICR_NACKCF;
+      return n;
+    }
+    uint8_t b = (uint8_t)I2C1->RXDR;
     if (b != 0xFFu && n < max)
     {
       dst[n++] = b;
     }
   }
-  gnss_i2c_stop();
+  (void)gnss_i2c_wait_flag(I2C_ISR_STOPF);
+  I2C1->ICR = I2C_ICR_STOPCF;
   return n;
 }
 
@@ -185,16 +158,15 @@ app_status_t gnss_init(void)
 
   gnss_ready = false;
 
-  /* Schritt 1: die beiden GPIOs als Open-Drain-I2C-Leitungen aufsetzen. */
-  gnss_i2c_pins_init();
+  /* Schritt 1: I2C1-Peripheral auf PB8/PB9 aufsetzen. */
+  if (gnss_i2c_hw_init() != APP_STATUS_OK)
+  {
+    printf("[GNSS] I2C1-Konfiguration fehlgeschlagen.\r\n");
+    return APP_STATUS_ERROR;
+  }
 
-  /* Schritt 2: Erreichbarkeit pruefen. Ein Adressbyte senden und schauen,
-   * ob der Teseo mit ACK antwortet (SDA im 9. Takt auf low zieht) --
-   * beweist Versorgung, Verdrahtung und Adresse in einem. */
-  gnss_i2c_start();
-  bool present = gnss_i2c_write_byte((uint8_t)(GNSS_I2C_ADDR << 1));
-  gnss_i2c_stop();
-  if (!present)
+  /* Schritt 2: Erreichbarkeit pruefen (ACK auf die Adresse). */
+  if (!gnss_i2c_probe())
   {
     printf("[GNSS] Teseo antwortet nicht auf I2C-Adresse 0x%02X.\r\n", GNSS_I2C_ADDR);
     return APP_STATUS_ERROR;
@@ -407,8 +379,8 @@ app_status_t gnss_poll(void)
     return APP_STATUS_NOT_READY;
   }
 
-  /* Lesetakt begrenzen, damit der Software-I2C die Hauptschleife nicht
-   * dominiert; der NMEA-Strom (ca. 0,5 kB/s) wird trotzdem locker geleert. */
+  /* Lesetakt begrenzen: alle 5 ms ein 32-Byte-Block (~1 ms Buszeit) leert
+   * den NMEA-Strom (ca. 0,5 kB/s) locker, ohne die Hauptschleife zu bremsen. */
   if ((now - gnss_last_poll_ms) < GNSS_POLL_GAP_MS)
   {
     return APP_STATUS_OK;

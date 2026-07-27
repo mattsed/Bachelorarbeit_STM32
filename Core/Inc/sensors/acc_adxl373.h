@@ -18,6 +18,11 @@ app_status_t acc_adxl373_read(acc_400g_data_t *data);
 /* Meldet, ob der ADXL373 erkannt und konfiguriert ist. */
 bool acc_adxl373_is_ready(void);
 
+/* Liest die vom Sensor selbst festgehaltenen Maximalbeschleunigungen
+ * (MAXPEAK-Register, seit dem letzten Auslesen). Das Auslesen setzt die
+ * Register automatisch zurueck. Werte in Roheinheiten (1 LSB = 200 mg). */
+app_status_t acc_adxl373_read_peaks(int16_t *x, int16_t *y, int16_t *z);
+
 #ifdef __cplusplus
 }
 #endif

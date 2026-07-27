@@ -21,6 +21,11 @@ app_status_t storage_logger_stop(void);
 /* Startet eine neue Logdatei (naechste freie LOG_nnn.CSV). */
 app_status_t storage_logger_start(void);
 
+/* Versucht nach einem SD-Fehler im Betrieb (Karte gezogen, Schreibfehler)
+ * einen kompletten Neuaufbau: Karte neu initialisieren, Dateisystem neu
+ * mounten, neue Logdatei anlegen. */
+app_status_t storage_logger_recover(void);
+
 /* Meldet, ob der Logger bereit ist, Daten dauerhaft zu speichern. */
 bool storage_logger_is_ready(void);
 

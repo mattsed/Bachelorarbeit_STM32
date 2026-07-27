@@ -10,6 +10,9 @@
 #define ADXL373_REG_DEVID_MST   0x01u
 #define ADXL373_REG_PARTID      0x02u
 #define ADXL373_REG_X_DATA_H    0x08u  /* ab hier: X/Y/Z je H+L, 12 Bit linksbuendig */
+#define ADXL373_REG_X_MAXPEAK_H 0x15u  /* ab hier: Maximalwerte X/Y/Z je H+L;
+                                        * der Sensor haelt sie mit voller
+                                        * 400-Hz-Rate fest, Lesen setzt zurueck */
 #define ADXL373_REG_TIMING      0x3Du
 #define ADXL373_REG_MEASURE     0x3Eu
 #define ADXL373_REG_POWER_CTL   0x3Fu
@@ -138,4 +141,32 @@ app_status_t acc_adxl373_read(acc_400g_data_t *data)
 bool acc_adxl373_is_ready(void)
 {
   return acc_adxl373_ready;
+}
+
+app_status_t acc_adxl373_read_peaks(int16_t *x, int16_t *y, int16_t *z)
+{
+  const board_interfaces_t *board = board_get_interfaces();
+  /* 1 Adressbyte + 6 Datenbytes (X/Y/Z-MAXPEAK je H+L, Auto-Inkrement). */
+  uint8_t tx[7] = { ADXL373_SPI_READ(ADXL373_REG_X_MAXPEAK_H) };
+  uint8_t rx[7] = { 0 };
+
+  if (!acc_adxl373_ready || x == NULL || y == NULL || z == NULL)
+  {
+    return APP_STATUS_NOT_READY;
+  }
+
+  acc_adxl373_cs(board, GPIO_PIN_RESET);
+  HAL_StatusTypeDef result = HAL_SPI_TransmitReceive(board->sensor_spi, tx, rx, sizeof(tx), 10);
+  acc_adxl373_cs(board, GPIO_PIN_SET);
+
+  if (result != HAL_OK)
+  {
+    return APP_STATUS_ERROR;
+  }
+
+  /* Gleiches Format wie die Messdaten: 12 Bit linksbuendig, 200 mg/LSB. */
+  *x = (int16_t)(((uint16_t)rx[1] << 8) | rx[2]) >> 4;
+  *y = (int16_t)(((uint16_t)rx[3] << 8) | rx[4]) >> 4;
+  *z = (int16_t)(((uint16_t)rx[5] << 8) | rx[6]) >> 4;
+  return APP_STATUS_OK;
 }
