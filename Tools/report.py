@@ -82,8 +82,13 @@ def _karte(df: pd.DataFrame, spur: pd.DataFrame,
         werte.append(float(p_max[maske].max()) if maske.any() else 0.0)
 
     figur = folium.Figure(height=520)
+    # Kachelquelle: Carto statt OpenStreetMap-Standard. Die ehrenamtlich
+    # betriebenen OSM-Server blockieren Anfragen ohne Referer -- und genau
+    # so fragt ein lokal geoeffnetes file://-HTML an (403 "Access blocked").
+    # Die Carto-Server erlauben das; Kartendaten sind weiterhin OSM.
     karte = folium.Map(location=[float(np.mean(lat)), float(np.mean(lon))],
-                       zoom_start=16, control_scale=True)
+                       zoom_start=16, control_scale=True,
+                       tiles="CartoDB positron")
     karte.add_to(figur)
 
     obergrenze = max(max(werte, default=0.0), 1.0)
