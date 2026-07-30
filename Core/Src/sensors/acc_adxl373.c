@@ -1,6 +1,7 @@
 #include "sensors/acc_adxl373.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 
 #include "board/board.h"
 
@@ -10,9 +11,6 @@
 #define ADXL373_REG_DEVID_MST   0x01u
 #define ADXL373_REG_PARTID      0x02u
 #define ADXL373_REG_X_DATA_H    0x08u  /* ab hier: X/Y/Z je H+L, 12 Bit linksbuendig */
-#define ADXL373_REG_X_MAXPEAK_H 0x15u  /* ab hier: Maximalwerte X/Y/Z je H+L;
-                                        * der Sensor haelt sie mit voller
-                                        * 400-Hz-Rate fest, Lesen setzt zurueck */
 #define ADXL373_REG_TIMING      0x3Du
 #define ADXL373_REG_MEASURE     0x3Eu
 #define ADXL373_REG_POWER_CTL   0x3Fu
@@ -22,13 +20,41 @@
 
 #define ADXL373_TIMING_VAL      0x00u  /* ODR 400 Hz */
 #define ADXL373_MEASURE_VAL     0x00u  /* Bandbreite 200 Hz */
-#define ADXL373_POWER_CTL_VAL   0x03u  /* Full-Bandwidth-Messbetrieb */
+/* Bit 0-1 Mode=11 (Full-Bandwidth-Messbetrieb), Bit 2 HPF_DIS=1: der
+ * eingebaute Hochpass wuerde die Erdbeschleunigung als "langsam driftenden
+ * Fehler" herausfiltern. Fuer einen Stoss-/Impaktsensor ist die AC-Kopplung
+ * ohnehin unerwuenscht: die Arbeit will die tatsaechlich wirkende
+ * Gesamtbeschleunigung inkl. Erdbeschleunigungs-Basislinie (wie bei einem
+ * Crash-Datenlogger), nicht nur die Differenz zu einer wandernden
+ * Nulllinie. Tiefpass bleibt aktiv (Bit 3 LPF_DIS=0) als Anti-Aliasing vor
+ * der 400-Hz-Abtastung. */
+#define ADXL373_POWER_CTL_VAL   0x07u
 
 #define ADXL373_SPI_READ(reg)   (uint8_t)(((reg) << 1) | 0x01u)
 #define ADXL373_SPI_WRITE(reg)  (uint8_t)((reg) << 1)
 
 /* Wird true, sobald der ADXL373 ueber SPI3 erkannt und konfiguriert ist. */
 static bool acc_adxl373_ready = false;
+
+/* Softwareseitige Spitzenwertverfolgung je Achse (Betrag), aktualisiert bei
+ * jedem acc_adxl373_read()-Aufruf (50 Hz im Messbetrieb). Ersetzt die
+ * eingebauten MAXPEAK-Register (0x15-0x1A) des Sensors: die liefern auf
+ * der realen Hardware trotz korrekter Konfiguration und bestaetigtem
+ * DATA_RDY zuverlaessig 0/0/0 -- ein auch im ADI-Support-Forum dokumentiertes,
+ * ungelöstes Verhalten (ez.analog.com/mems/f/q-a/164950), kein Fehler in
+ * dieser Ansteuerung. Nachteil gegenueber echter Hardware-Peak-Erkennung:
+ * nur 50-Hz-Aufloesung statt der vollen 400-Hz-Sensorrate -- fuer die
+ * Bachelorarbeit als bekannte Grenze dokumentiert. */
+static int16_t acc_adxl373_peak_x = 0;
+static int16_t acc_adxl373_peak_y = 0;
+static int16_t acc_adxl373_peak_z = 0;
+
+static void acc_adxl373_track_peak(int16_t x, int16_t y, int16_t z)
+{
+  if (abs(x) > abs(acc_adxl373_peak_x)) { acc_adxl373_peak_x = x; }
+  if (abs(y) > abs(acc_adxl373_peak_y)) { acc_adxl373_peak_y = y; }
+  if (abs(z) > abs(acc_adxl373_peak_z)) { acc_adxl373_peak_z = z; }
+}
 
 static void acc_adxl373_cs(const board_interfaces_t *board, GPIO_PinState state)
 {
@@ -135,6 +161,8 @@ app_status_t acc_adxl373_read(acc_400g_data_t *data)
   data->accel_x_raw = (int16_t)(((uint16_t)rx[1] << 8) | rx[2]) >> 4;
   data->accel_y_raw = (int16_t)(((uint16_t)rx[3] << 8) | rx[4]) >> 4;
   data->accel_z_raw = (int16_t)(((uint16_t)rx[5] << 8) | rx[6]) >> 4;
+
+  acc_adxl373_track_peak(data->accel_x_raw, data->accel_y_raw, data->accel_z_raw);
   return APP_STATUS_OK;
 }
 
@@ -143,30 +171,16 @@ bool acc_adxl373_is_ready(void)
   return acc_adxl373_ready;
 }
 
-app_status_t acc_adxl373_read_peaks(int16_t *x, int16_t *y, int16_t *z)
+void acc_adxl373_reset_peak_tracking(void)
 {
-  const board_interfaces_t *board = board_get_interfaces();
-  /* 1 Adressbyte + 6 Datenbytes (X/Y/Z-MAXPEAK je H+L, Auto-Inkrement). */
-  uint8_t tx[7] = { ADXL373_SPI_READ(ADXL373_REG_X_MAXPEAK_H) };
-  uint8_t rx[7] = { 0 };
+  acc_adxl373_peak_x = 0;
+  acc_adxl373_peak_y = 0;
+  acc_adxl373_peak_z = 0;
+}
 
-  if (!acc_adxl373_ready || x == NULL || y == NULL || z == NULL)
-  {
-    return APP_STATUS_NOT_READY;
-  }
-
-  acc_adxl373_cs(board, GPIO_PIN_RESET);
-  HAL_StatusTypeDef result = HAL_SPI_TransmitReceive(board->sensor_spi, tx, rx, sizeof(tx), 10);
-  acc_adxl373_cs(board, GPIO_PIN_SET);
-
-  if (result != HAL_OK)
-  {
-    return APP_STATUS_ERROR;
-  }
-
-  /* Gleiches Format wie die Messdaten: 12 Bit linksbuendig, 200 mg/LSB. */
-  *x = (int16_t)(((uint16_t)rx[1] << 8) | rx[2]) >> 4;
-  *y = (int16_t)(((uint16_t)rx[3] << 8) | rx[4]) >> 4;
-  *z = (int16_t)(((uint16_t)rx[5] << 8) | rx[6]) >> 4;
-  return APP_STATUS_OK;
+void acc_adxl373_get_peak_tracking(int16_t *x, int16_t *y, int16_t *z)
+{
+  *x = acc_adxl373_peak_x;
+  *y = acc_adxl373_peak_y;
+  *z = acc_adxl373_peak_z;
 }

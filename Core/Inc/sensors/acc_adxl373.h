@@ -18,10 +18,15 @@ app_status_t acc_adxl373_read(acc_400g_data_t *data);
 /* Meldet, ob der ADXL373 erkannt und konfiguriert ist. */
 bool acc_adxl373_is_ready(void);
 
-/* Liest die vom Sensor selbst festgehaltenen Maximalbeschleunigungen
- * (MAXPEAK-Register, seit dem letzten Auslesen). Das Auslesen setzt die
- * Register automatisch zurueck. Werte in Roheinheiten (1 LSB = 200 mg). */
-app_status_t acc_adxl373_read_peaks(int16_t *x, int16_t *y, int16_t *z);
+/* Setzt die softwareseitige Spitzenwertverfolgung zurueck (Aufruf bei
+ * Aufzeichnungsstart). Ersetzt die MAXPEAK-Hardwareregister des Sensors,
+ * die auf realer Hardware zuverlaessig 0 liefern (siehe acc_adxl373.c). */
+void acc_adxl373_reset_peak_tracking(void);
+
+/* Liefert die groessten seit dem letzten Reset beobachteten Betraege je
+ * Achse (mit Originalvorzeichen). Werte in Roheinheiten (1 LSB = 200 mg),
+ * aktualisiert bei jedem acc_adxl373_read()-Aufruf. */
+void acc_adxl373_get_peak_tracking(int16_t *x, int16_t *y, int16_t *z);
 
 #ifdef __cplusplus
 }

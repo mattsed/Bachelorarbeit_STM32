@@ -548,11 +548,9 @@ app_status_t storage_logger_start(void)
   }
   printf("[microSD] Logdatei %s angelegt, Aufzeichnung laeuft.\r\n", name);
 
-  /* MAXPEAK-Register des ADXL373 durch einmaliges Lesen zuruecksetzen --
-   * so beziehen sich die beim Stopp ausgegebenen Spitzenwerte genau auf
-   * diese Aufzeichnung. */
-  int16_t discard_x, discard_y, discard_z;
-  (void)acc_adxl373_read_peaks(&discard_x, &discard_y, &discard_z);
+  /* Spitzenwertverfolgung des ADXL373 zuruecksetzen -- so beziehen sich die
+   * beim Stopp ausgegebenen Werte genau auf diese Aufzeichnung. */
+  acc_adxl373_reset_peak_tracking();
 
   storage_sample_count = 0;
   storage_logger_ready = true;
@@ -575,16 +573,13 @@ app_status_t storage_logger_stop(void)
   printf("[microSD] Aufzeichnung gestoppt, Datei geschlossen (%lu Datensaetze).\r\n",
          (unsigned long)storage_sample_count);
 
-  /* Spitzenwerte der Fahrt ausgeben: Der ADXL373 haelt sie intern mit
-   * seiner vollen 400-Hz-Rate fest -- er sieht also auch kurze Stoesse,
-   * die zwischen zwei 50-Hz-Abtastungen der CSV liegen. 1 LSB = 200 mg,
-   * Ausgabe ganzzahlig in Milli-g (newlib-nano kann kein %f). */
+  /* Spitzenwerte der Fahrt ausgeben (softwareseitig ueber die 50-Hz-Samples
+   * verfolgt, siehe acc_adxl373.c). 1 LSB = 200 mg, Ausgabe ganzzahlig in
+   * Milli-g (newlib-nano kann kein %f). */
   int16_t peak_x = 0, peak_y = 0, peak_z = 0;
-  if (acc_adxl373_read_peaks(&peak_x, &peak_y, &peak_z) == APP_STATUS_OK)
-  {
-    printf("[ADXL373] Spitzen der Aufzeichnung: X=%ld  Y=%ld  Z=%ld mg\r\n",
-           (long)peak_x * 200, (long)peak_y * 200, (long)peak_z * 200);
-  }
+  acc_adxl373_get_peak_tracking(&peak_x, &peak_y, &peak_z);
+  printf("[ADXL373] Spitzen der Aufzeichnung: X=%ld  Y=%ld  Z=%ld mg\r\n",
+         (long)peak_x * 200, (long)peak_y * 200, (long)peak_z * 200);
   return APP_STATUS_OK;
 }
 
