@@ -22,8 +22,9 @@ from plotly.subplots import make_subplots
 import folium
 import branca.colormap as cm
 
-# Gleiche Schwellen wie in auswertung.py (dort dokumentiert).
-from auswertung import GNSS_LUECKE_MAX_S
+# Gleiche Schwellen wie in der uebrigen Auswertung (in konstanten.py
+# dokumentiert).
+from konstanten import GNSS_LUECKE_MAX_S
 
 
 def _zeitreihen(df: pd.DataFrame) -> str:
