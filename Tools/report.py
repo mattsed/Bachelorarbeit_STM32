@@ -51,8 +51,14 @@ def _zeitreihen(df: pd.DataFrame) -> str:
                   row=2, col=1)
 
     fig.add_trace(go.Scattergl(x=df["t_s"], y=df["v_km_h"],
-                               name="v", line=dict(color="#ff7f0e")),
+                               name="v GNSS", line=dict(color="#ff7f0e")),
                   row=3, col=1)
+    # Fusionierte Geschwindigkeit (falls fusion.py gelaufen ist).
+    if "v_fusion_kmh" in df.columns:
+        fig.add_trace(go.Scattergl(x=df["t_s"], y=df["v_fusion_kmh"],
+                                   name="v Fusion (IMU+GNSS)",
+                                   line=dict(color="#8c564b")),
+                      row=3, col=1)
 
     fig.update_layout(height=720, hovermode="x unified",
                       legend=dict(orientation="h", y=1.06),

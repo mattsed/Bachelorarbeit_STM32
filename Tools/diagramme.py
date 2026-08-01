@@ -51,8 +51,14 @@ def plots(df: pd.DataFrame, basis: Path) -> None:
     a.grid(True, alpha=0.3)
 
     a = achsen[4]
-    a.plot(df["t_s"], df["v_km_h"], color="tab:green")
-    a.set_ylabel("GNSS v [km/h]")
+    a.plot(df["t_s"], df["v_km_h"], color="tab:green", label="GNSS (1 Hz)")
+    # Fusionierte Geschwindigkeit (falls fusion.py gelaufen ist): glattes
+    # 50-Hz-Profil aus IMU-Praediktion + GNSS-Korrektur.
+    if "v_fusion_kmh" in df.columns:
+        a.plot(df["t_s"], df["v_fusion_kmh"], color="tab:orange",
+               lw=1.0, label="Fusion IMU+GNSS (50 Hz)")
+        a.legend(loc="upper right", ncols=2)
+    a.set_ylabel("v [km/h]")
     a.set_xlabel("Zeit [s]")
     a.grid(True, alpha=0.3)
 

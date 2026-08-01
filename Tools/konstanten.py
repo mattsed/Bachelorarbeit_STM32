@@ -50,3 +50,33 @@ GNSS_LUECKE_MAX_S = 3.0     # bis hierhin wird linear interpoliert, danach Bruch
 BREMS_START_BAR = 2.0
 BREMS_ENDE_BAR = 1.5
 BREMS_MIN_DAUER_S = 0.2
+
+# ------------------------------------------------------------ Sensorfusion
+# Lagefilter (Madgwick): beta gewichtet die Accelerometer-Korrektur gegen
+# die Gyro-Integration. Klein = traege, aber vibrationsunempfindlich;
+# gross = schnell, aber jede Stoerbeschleunigung verbiegt die Lage.
+# 0,05 ist ein ueblicher Wert fuer Fahrzeuganwendungen mit Vibration.
+MADGWICK_BETA = 0.05
+
+# Welche IMU-Achse in Fahrtrichtung zeigt und mit welchem Vorzeichen
+# (+1 = positive Achsrichtung nach vorn). TODO: erst mit einer echten
+# Fahrmessung kalibrierbar -- beim Anfahren muss die neigungsbereinigte
+# Laengsbeschleunigung positiv werden, beim Bremsen negativ.
+FAHRT_ACHSE = "x"
+FAHRT_VORZEICHEN = +1.0
+
+# Geschwindigkeits-Kalman (1D): Prozessrauschen beschreibt, wie stark die
+# per IMU praedizierte Geschwindigkeit pro Schritt vom wahren Wert
+# abweichen kann (Achsfehler, Restneigung, Vibrationen); Messrauschen die
+# Unsicherheit der GNSS-Geschwindigkeit (Doppler-basiert, im Stand ~0,5 m/s
+# Rauschen, siehe STILLSTAND_SCHWELLE_M_S). Das Verhaeltnis der beiden
+# bestimmt das Kalman-Gain, also wie stark jedes GNSS-Update die
+# IMU-Praediktion zurueckzieht.
+# TODO Solange FAHRT_ACHSE unkalibriert ist, ist die IMU-Praediktion wenig
+# vertrauenswuerdig -> Prozessrauschen bewusst gross (2,5), damit das GNSS
+# dominiert. Nach der Achskalibrierung mit einer echten Fahrmessung kann
+# der Wert Richtung ~0,5..1,0 gesenkt werden (IMU bekommt mehr Gewicht,
+# Profil zwischen den GNSS-Stuetzstellen wird informativer).
+KALMAN_SIGMA_A_M_S2 = 2.5       # Standardabw. des Beschleunigungsfehlers
+KALMAN_SIGMA_GNSS_M_S = 0.5     # Standardabw. der GNSS-Geschwindigkeit
+G_M_S2 = 9.81                   # Erdbeschleunigung fuer g -> m/s^2

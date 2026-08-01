@@ -19,6 +19,7 @@ Die eigentliche Arbeit steckt in den Modulen dieses Ordners:
     konstanten.py   Umrechnungsfaktoren und Schwellwerte (zur Firmware passend)
     daten.py        CSV laden, Rohwerte -> physikalische Einheiten
     gnss.py         1-Hz-Spur extrahieren, Ausreisser/Luecken bereinigen
+    fusion.py       Sensorfusion: Lagefilter (Madgwick) + v-Kalman (IMU+GNSS)
     bremsen.py      Bremsereignisse erkennen (Hysterese-Detektor)
     konsole.py      Textausgabe (Zusammenfassung, Ereignistabelle)
     diagramme.py    statische PNG-Plots (matplotlib)
@@ -34,6 +35,7 @@ import matplotlib.pyplot as plt
 
 from daten import lade_csv
 from gnss import gnss_spur
+from fusion import lagefilter, geschwindigkeitsfilter
 from bremsen import bremsereignisse
 from konsole import zusammenfassung, drucke_ereignisse
 from diagramme import plots, track_plot
@@ -64,6 +66,12 @@ def main() -> None:
     print(f"=== Auswertung: {pfad.name} ===")
     df = lade_csv(pfad)
     spur, gnss_stats = gnss_spur(df)
+
+    # Sensorfusion: erst die Lage (liefert die neigungsbereinigte
+    # Laengsbeschleunigung), darauf aufbauend die Geschwindigkeit.
+    df = lagefilter(df)
+    df = geschwindigkeitsfilter(df, spur)
+
     zusammenfassung(df, gnss_stats)
     ereignisse = bremsereignisse(df)
     drucke_ereignisse(ereignisse)
