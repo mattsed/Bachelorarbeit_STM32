@@ -1,6 +1,7 @@
 #include "sensors/gnss.h"
 
 #include <stdio.h>
+#include <string.h>
 
 #include "board/board.h"
 
@@ -186,6 +187,549 @@ static uint32_t gnss_i2c_read_chunk(uint8_t *dst, uint32_t max)
   (void)gnss_i2c_wait_flag(I2C_ISR_STOPF);
   I2C1->ICR = I2C_ICR_STOPCF;
   return n;
+}
+
+/* ==========================================================================
+ * Senden proprietaerer NMEA-Befehle ($PSTM...) an den Teseo.
+ *
+ * Bisher hat der Treiber dem Modul nur zugehoert. Zum Abfragen der
+ * Firmware-Version und spaeter zum Umstellen der Fix-Rate muss er auch
+ * senden koennen. Laut Datenblatt unterstuetzt der Teseo-LIV4F das
+ * NMEA-Protokoll auf UART UND I2C -- es ist also derselbe Bus wie beim
+ * Lesen, nur in die andere Richtung.
+ * ========================================================================== */
+
+#define GNSS_CMD_MAX_LEN     96u   /* passt in NBYTES (8 Bit) */
+#define GNSS_CMD_ANSWER_MS  700u   /* Wartezeit auf die Antwort je Befehl */
+#define GNSS_CMD_RETRIES      3u   /* Wiederholungen bei NACK */
+
+/* Kein fuehrendes Port-Byte: AN5203 (ST, "Teseo-LIV3F -- I2C Positioning
+ * Sensor", Abschnitt 4.4) sendet den NMEA-Rohstring unveraendert an
+ * Adresse 0x3A. Das 0xFF aus der Arduino-Bibliothek stm32duino ist dort
+ * eine Eigenheit der Wire-Abstraktion, keine Anforderung des Moduls. */
+
+static const char gnss_hex[] = "0123456789ABCDEF";
+
+/* Ergebnis eines Schreibversuchs -- absichtlich fein aufgeschluesselt,
+ * weil "hat nicht geklappt" beim Bring-up nicht weiterhilft. */
+typedef enum
+{
+  GNSS_TX_OK = 0,
+  GNSS_TX_NACK_ADDR,   /* Modul quittiert die Adresse nicht */
+  GNSS_TX_NACK_DATA,   /* Adresse ok, aber ein Datenbyte abgelehnt */
+  GNSS_TX_TIMEOUT,     /* Bus haengt: weder TXIS noch NACK kamen */
+  GNSS_TX_NO_STOP,     /* Daten raus, aber kein sauberes Stop */
+} gnss_tx_result_t;
+
+/* Wartet auf TXIS -- oder darauf, dass stattdessen ein NACK eintrifft.
+ * Wichtig: Bei einem NACK setzt das Peripheral TXIS nie, ein reines
+ * Warten auf TXIS wuerde also immer in den Timeout laufen und die
+ * eigentliche Ursache verschleiern. */
+static gnss_tx_result_t gnss_i2c_wait_txis(void)
+{
+  uint32_t start = HAL_GetTick();
+
+  for (;;)
+  {
+    uint32_t isr = I2C1->ISR;
+
+    if ((isr & I2C_ISR_NACKF) != 0u)
+    {
+      return GNSS_TX_NACK_DATA;
+    }
+    if ((isr & I2C_ISR_TXIS) != 0u)
+    {
+      return GNSS_TX_OK;
+    }
+    if ((HAL_GetTick() - start) > GNSS_I2C_FLAG_TIMEOUT_MS)
+    {
+      return GNSS_TX_TIMEOUT;
+    }
+  }
+}
+
+/* Schreibt einen Block auf den Bus. Gegenstueck zu gnss_i2c_read_chunk():
+ * Das Peripheral wickelt Start, Adressierung und Stop selbst ab (AUTOEND),
+ * die CPU schiebt nur jedes Byte ins Senderegister, sobald TXIS meldet,
+ * dass Platz ist. failed_at liefert bei Fehlern den Byte-Index zurueck. */
+static gnss_tx_result_t gnss_i2c_write_block(const uint8_t *src, uint32_t len,
+                                             uint32_t *failed_at)
+{
+  gnss_tx_result_t res = GNSS_TX_OK;
+
+  if (failed_at != NULL)
+  {
+    *failed_at = 0;
+  }
+
+  I2C1->ICR = I2C_ICR_STOPCF | I2C_ICR_NACKCF;
+  I2C1->CR2 = ((uint32_t)GNSS_I2C_ADDR << 1) |
+              (len << I2C_CR2_NBYTES_Pos) |
+              I2C_CR2_AUTOEND | I2C_CR2_START;
+
+  for (uint32_t i = 0; i < len; ++i)
+  {
+    res = gnss_i2c_wait_txis();
+    if (res != GNSS_TX_OK)
+    {
+      /* Ein NACK auf das allererste Byte bedeutet: schon die Adresse
+       * wurde nicht quittiert (das Modul nimmt gar keine Schreibzugriffe
+       * an), spaeter heisst es: Adresse ok, Inhalt abgelehnt. */
+      if (res == GNSS_TX_NACK_DATA && i == 0u)
+      {
+        res = GNSS_TX_NACK_ADDR;
+      }
+      if (failed_at != NULL)
+      {
+        *failed_at = i;
+      }
+      I2C1->ICR = I2C_ICR_STOPCF | I2C_ICR_NACKCF;
+      gnss_i2c_reset_peripheral();
+      return res;
+    }
+    I2C1->TXDR = src[i];
+  }
+
+  if (!gnss_i2c_wait_flag(I2C_ISR_STOPF))
+  {
+    gnss_i2c_reset_peripheral();
+    return GNSS_TX_NO_STOP;
+  }
+  if ((I2C1->ISR & I2C_ISR_NACKF) != 0u)
+  {
+    if (failed_at != NULL)
+    {
+      *failed_at = len;
+    }
+    I2C1->ICR = I2C_ICR_STOPCF | I2C_ICR_NACKCF;
+    return GNSS_TX_NACK_DATA;
+  }
+  I2C1->ICR = I2C_ICR_STOPCF | I2C_ICR_NACKCF;
+  return GNSS_TX_OK;
+}
+
+/* Schreibt denselben Inhalt, aber jedes Byte als eigene I2C-Transaktion
+ * (Start, Adresse, ein Byte, Stop). Testet die Vermutung, dass der Teseo
+ * pro Schreibzugriff nur ein einziges Byte annimmt. */
+static gnss_tx_result_t gnss_i2c_write_bytewise(const uint8_t *src, uint32_t len,
+                                                uint32_t *failed_at)
+{
+  for (uint32_t i = 0; i < len; ++i)
+  {
+    gnss_tx_result_t r = gnss_i2c_write_block(&src[i], 1u, NULL);
+
+    if (r != GNSS_TX_OK)
+    {
+      if (failed_at != NULL)
+      {
+        *failed_at = i;
+      }
+      return r;
+    }
+  }
+  return GNSS_TX_OK;
+}
+
+static const char *gnss_tx_result_text(gnss_tx_result_t res)
+{
+  switch (res)
+  {
+    case GNSS_TX_OK:        return "ok";
+    case GNSS_TX_NACK_ADDR: return "NACK auf die Adresse (Modul nimmt keine Schreibzugriffe an)";
+    case GNSS_TX_NACK_DATA: return "NACK auf ein Datenbyte";
+    case GNSS_TX_TIMEOUT:   return "Timeout (weder TXIS noch NACK)";
+    case GNSS_TX_NO_STOP:   return "kein Stop-Zustand";
+    default:                return "unbekannt";
+  }
+}
+
+/* STAND DER INBETRIEBNAHME (11.08.2026) -- WICHTIG:
+ * Der Teseo-LIV4F lehnt Schreibzugriffe auf dem I2C bislang vollstaendig
+ * ab. Am Board reproduzierbar gemessen:
+ *   - leerer Schreibzugriff (nur Adressierung): wird mit ACK quittiert,
+ *     Verdrahtung und Adresse 0x3A stimmen also auch beim Schreiben;
+ *   - sobald ein Datenbyte folgt: NACK auf das ERSTE Byte.
+ * Ausgeschlossene Ursachen (alle einzeln geprueft, Verhalten identisch):
+ *   - Bustakt: 380 kHz und 100 kHz;
+ *   - Inhalt des ersten Bytes: '$' wie auch das Port-Byte 0xFF;
+ *   - Rahmenaufbau: ein Block mit AUTOEND wie auch jedes Byte als eigene
+ *     Transaktion (gnss_i2c_write_bytewise);
+ *   - Wiederholungen: 3 Versuche mit 20 ms Abstand;
+ *   - Neuinitialisierung des I2C-Peripherals direkt vor dem Senden, wie
+ *     sie AN5203 Abschnitt 4.4 in seiner Hauptschleife vormacht.
+ *
+ * WAHRSCHEINLICHE URSACHE (nicht pruefbar ohne Schreibzugriff):
+ * AN5203 Abschnitt 1.1 setzt voraus, dass die Modulkonfiguration vorher
+ * geaendert wurde -- die I2C-Nachrichtenliste (CDB-ID 231/232) soll auf
+ * null stehen, damit das GNSS den internen I2C-Puffer nicht dauernd mit
+ * Positionsdaten fuellt. Unser Modul laeuft in der Werkseinstellung und
+ * streamt fortlaufend NMEA ueber I2C, also genau in dem Zustand, den die
+ * Application Note ausdruecklich abschalten laesst. Diese Konfiguration
+ * wird laut ST mit dem PC-Werkzeug Teseo-Suite vorgenommen, nicht ueber
+ * I2C -- der Schreibkanal laesst sich also vermutlich nicht per I2C
+ * selbst freischalten.
+ *
+ * NAECHSTER SCHRITT: UART-Port des Teseo nutzen (auf der X-NUCLEO-LIV4A1
+ * herausgefuehrt) -- entweder einmalig per USB-UART-Adapter und
+ * Teseo-Suite zum Umkonfigurieren, oder dauerhaft als Befehlsweg aus der
+ * Firmware heraus.
+ *
+ * Baut aus dem Rumpf einen vollstaendigen NMEA-Satz und sendet ihn.
+ * Uebergeben wird nur der Teil zwischen '$' und '*', z. B.
+ * "PSTMGETSWVER,255" -- Dollarzeichen, Pruefsumme und Zeilenende ergaenzt
+ * diese Funktion. Die NMEA-Pruefsumme ist das XOR aller Zeichen zwischen
+ * '$' und '*', ausgegeben als zwei Hex-Ziffern. */
+app_status_t gnss_send_command(const char *body)
+{
+  char frame[GNSS_CMD_MAX_LEN];
+  uint8_t crc = 0;
+  uint32_t n = 0;
+
+  if (!gnss_ready || body == NULL)
+  {
+    return APP_STATUS_NOT_READY;
+  }
+
+  frame[n++] = '$';
+  for (const char *p = body; *p != '\0'; ++p)
+  {
+    if (n >= (GNSS_CMD_MAX_LEN - 5u))
+    {
+      printf("[GNSS] Befehl zu lang fuer den Sendepuffer.\r\n");
+      return APP_STATUS_ERROR;
+    }
+    crc ^= (uint8_t)*p;
+    frame[n++] = *p;
+  }
+  frame[n++] = '*';
+  frame[n++] = gnss_hex[(crc >> 4) & 0x0Fu];
+  frame[n++] = gnss_hex[crc & 0x0Fu];
+  frame[n++] = '\r';
+  frame[n++] = '\n';
+
+  /* I2C-Peripheral unmittelbar vor dem Senden neu aufsetzen. AN5203 macht
+   * das in seiner Hauptschleife vor jeder Transaktion (HAL_I2C_DeInit +
+   * HAL_I2C_Init) -- offenbar hinterlaesst der fortlaufende Lesebetrieb
+   * einen Zustand, in dem das Modul Schreibzugriffe nicht annimmt. */
+  if (gnss_i2c_hw_init() != APP_STATUS_OK)
+  {
+    printf("[GNSS] I2C liess sich vor dem Senden nicht neu aufsetzen.\r\n");
+    return APP_STATUS_ERROR;
+  }
+
+  /* Wiederholversuche, falls das Modul gerade nicht aufnahmebereit ist.
+   * Der Bustakt spielt dabei keine Rolle -- 380 kHz und 100 kHz verhielten
+   * sich beim Bring-up identisch. */
+  uint32_t failed_at = 0;
+  gnss_tx_result_t res = GNSS_TX_TIMEOUT;
+
+  for (uint32_t attempt = 0; attempt < GNSS_CMD_RETRIES; ++attempt)
+  {
+    res = gnss_i2c_write_block((const uint8_t *)frame, n, &failed_at);
+    if (res == GNSS_TX_OK)
+    {
+      break;
+    }
+    HAL_Delay(20);
+  }
+
+  /* Ausweichweg: einzelne Bytes je Transaktion. */
+  if (res != GNSS_TX_OK)
+  {
+    res = gnss_i2c_write_bytewise((const uint8_t *)frame, n, &failed_at);
+    if (res == GNSS_TX_OK)
+    {
+      printf("[GNSS] Hinweis: Modul nimmt nur ein Byte je Transaktion an.\r\n");
+    }
+  }
+
+  if (res != GNSS_TX_OK)
+  {
+    printf("[GNSS] Befehl $%s abgewiesen: %s (Byte %lu von %lu).\r\n",
+           body, gnss_tx_result_text(res),
+           (unsigned long)failed_at, (unsigned long)n);
+    return APP_STATUS_ERROR;
+  }
+  return APP_STATUS_OK;
+}
+
+/* Liest nach einem Befehl den NMEA-Strom mit und gibt jede $PSTM-Antwort
+ * auf der Konsole aus. Rueckgabe: Anzahl gefundener Antwortsaetze.
+ *
+ * ACHTUNG: blockiert bis zum Ablauf von timeout_ms. Nur fuer Bring-up und
+ * Diagnose gedacht und nur mit timeout_ms deutlich unter der Watchdog-Zeit
+ * (4 s) aufrufen -- am besten aus app_init(), also bevor der Watchdog
+ * scharf geschaltet wird. */
+static uint32_t gnss_collect_answer(uint32_t timeout_ms)
+{
+  uint8_t chunk[GNSS_I2C_CHUNK];
+  char line[GNSS_CMD_MAX_LEN];
+  uint32_t line_len = 0;
+  bool in_line = false;
+  uint32_t hits = 0;
+  uint32_t start = HAL_GetTick();
+
+  while ((HAL_GetTick() - start) < timeout_ms)
+  {
+    uint32_t n = gnss_i2c_read_chunk(chunk, sizeof(chunk));
+
+    for (uint32_t i = 0; i < n; ++i)
+    {
+      char c = (char)chunk[i];
+
+      if (c == '$')
+      {
+        in_line = true;
+        line_len = 0;
+        continue;
+      }
+      if (!in_line)
+      {
+        continue;
+      }
+      if (c == '\r' || c == '\n')
+      {
+        line[line_len] = '\0';
+        if (line_len > 4u && strncmp(line, "PSTM", 4) == 0)
+        {
+          printf("[GNSS] Antwort: $%s\r\n", line);
+          ++hits;
+        }
+        in_line = false;
+        continue;
+      }
+      if (line_len < (sizeof(line) - 1u))
+      {
+        line[line_len++] = c;
+      }
+    }
+    HAL_Delay(2);
+  }
+  return hits;
+}
+
+/* Fragt die Firmware-Version des Moduls ab.
+ *
+ * Die Zuordnung der Abfrage-IDs unterscheidet sich zwischen den Teseo-
+ * Generationen (massgeblich ist UM3009 fuer den LIV4F). Statt auf eine ID
+ * zu setzen, werden mehrere gaengige abgefragt und alles ausgegeben, was
+ * zurueckkommt -- fuer eine einmalige Bring-up-Abfrage der robusteste Weg. */
+app_status_t gnss_query_version(void)
+{
+  static const char *const queries[] =
+  {
+    "PSTMGETSWVER,255",
+    "PSTMGETSWVER,6",
+    "PSTMGETSWVER,0",
+  };
+  uint32_t hits = 0;
+
+  if (!gnss_ready)
+  {
+    return APP_STATUS_NOT_READY;
+  }
+
+  /* Vorprobe: Nimmt das Modul ueberhaupt einen Schreibzugriff an? Der
+   * leere Schreibzugriff testet nur Adressierung und ACK -- schlaegt schon
+   * er fehl, liegt es nicht am Inhalt des Befehls. */
+  printf("[GNSS] Schreibzugriff-Vorprobe: %s\r\n",
+         gnss_i2c_probe() ? "Adresse wird quittiert" : "keine Quittung");
+
+  printf("[GNSS] frage Firmware-Version ab...\r\n");
+  for (uint32_t i = 0; i < (sizeof(queries) / sizeof(queries[0])); ++i)
+  {
+    if (gnss_send_command(queries[i]) != APP_STATUS_OK)
+    {
+      continue;
+    }
+    hits += gnss_collect_answer(GNSS_CMD_ANSWER_MS);
+  }
+
+  if (hits == 0u)
+  {
+    printf("[GNSS] keine Versionsantwort erhalten -- Modul akzeptiert die "
+           "Abfrage nicht oder nutzt andere IDs (siehe UM3009).\r\n");
+    return APP_STATUS_ERROR;
+  }
+  return APP_STATUS_OK;
+}
+
+/* ==========================================================================
+ * UART-Weg zum Teseo (Bring-up).
+ *
+ * Der UART des Moduls liegt auf der X-NUCLEO-LIV4A1 auf den Arduino-Pins
+ * D0/D1 und damit auf PB7/PB6 des Nucleo -- also auf LPUART1, das CubeMX
+ * ohnehin schon einrichtet (board->gnss_uart). Es braucht also keinen
+ * externen USB-UART-Adapter, um Befehle ins Modul zu bekommen.
+ *
+ * Die Werks-Baudrate steht weder im Datenblatt des LIV4F noch in AN5203,
+ * deshalb wird sie hier durchprobiert: bei welcher Rate ein '$' im Strom
+ * auftaucht, die stimmt.
+ * ========================================================================== */
+
+#define GNSS_UART_LISTEN_MS   600u
+
+/* Horcht bei der aktuellen Einstellung und zaehlt Bytes sowie '$'-Zeichen.
+ * pstm != NULL: gefundene $PSTM-Antwortsaetze werden ausgegeben. */
+static uint32_t gnss_uart_listen(UART_HandleTypeDef *u, uint32_t ms,
+                                 uint32_t *dollars, uint32_t *pstm)
+{
+  char line[GNSS_CMD_MAX_LEN];
+  uint32_t line_len = 0;
+  bool in_line = false;
+  uint32_t total = 0;
+  uint32_t start = HAL_GetTick();
+
+  if (dollars != NULL) { *dollars = 0; }
+  if (pstm != NULL)    { *pstm = 0; }
+
+  while ((HAL_GetTick() - start) < ms)
+  {
+    uint8_t b;
+
+    if (HAL_UART_Receive(u, &b, 1, 5) != HAL_OK)
+    {
+      continue;
+    }
+    ++total;
+
+    char c = (char)b;
+    if (c == '$')
+    {
+      if (dollars != NULL) { ++(*dollars); }
+      in_line = true;
+      line_len = 0;
+      continue;
+    }
+    if (!in_line)
+    {
+      continue;
+    }
+    if (c == '\r' || c == '\n')
+    {
+      line[line_len] = '\0';
+      if (pstm != NULL && line_len > 4u && strncmp(line, "PSTM", 4) == 0)
+      {
+        printf("[GNSS-UART] Antwort: $%s\r\n", line);
+        ++(*pstm);
+      }
+      in_line = false;
+      continue;
+    }
+    if (line_len < (sizeof(line) - 1u))
+    {
+      line[line_len++] = c;
+    }
+  }
+  return total;
+}
+
+/* Sucht die Baudrate des Teseo-UART und fragt dort die Firmware-Version ab.
+ * Blockiert einige Sekunden -- nur aus app_init() aufrufen. */
+app_status_t gnss_uart_bringup(void)
+{
+  static const uint32_t bauds[] = { 9600u, 19200u, 38400u, 57600u, 115200u, 230400u };
+  static const char *const queries[] =
+  {
+    "PSTMGETSWVER,255",
+    "PSTMGETSWVER,6",
+    "PSTMGETSWVER,0",
+  };
+  const board_interfaces_t *board = board_get_interfaces();
+  UART_HandleTypeDef *u = board->gnss_uart;
+  uint32_t found_baud = 0;
+
+  printf("[GNSS-UART] suche Baudrate des Teseo auf LPUART1 (PB6/PB7)...\r\n");
+
+  for (uint32_t i = 0; i < (sizeof(bauds) / sizeof(bauds[0])); ++i)
+  {
+    uint32_t dollars = 0;
+
+    u->Init.BaudRate = bauds[i];
+    if (HAL_UART_Init(u) != HAL_OK)
+    {
+      printf("[GNSS-UART] %lu Baud: nicht einstellbar.\r\n", (unsigned long)bauds[i]);
+      continue;
+    }
+
+    /* Zusaetzlich die rohe Leitungsaktivitaet zaehlen: Rahmen- und
+     * Rauschfehler entstehen nur, wenn ueberhaupt Flanken ankommen.
+     * Damit laesst sich "falsche Baudrate" von "gar kein Signal"
+     * unterscheiden -- der entscheidende Hinweis, ob die Leitung
+     * ueberhaupt verbunden ist. */
+    uint32_t errors = 0;
+    uint32_t start = HAL_GetTick();
+    while ((HAL_GetTick() - start) < 100u)
+    {
+      uint32_t isr = u->Instance->ISR;
+
+      if ((isr & (USART_ISR_FE | USART_ISR_NE | USART_ISR_ORE | USART_ISR_RXNE_RXFNE)) != 0u)
+      {
+        ++errors;
+        u->Instance->ICR = USART_ICR_FECF | USART_ICR_NECF | USART_ICR_ORECF;
+        (void)u->Instance->RDR;
+      }
+    }
+
+    uint32_t total = gnss_uart_listen(u, GNSS_UART_LISTEN_MS, &dollars, NULL);
+    printf("[GNSS-UART] %6lu Baud: %3lu Bytes, %lu x '$', Leitungsaktivitaet %lu\r\n",
+           (unsigned long)bauds[i], (unsigned long)total,
+           (unsigned long)dollars, (unsigned long)errors);
+
+    if (dollars > 0u && found_baud == 0u)
+    {
+      found_baud = bauds[i];
+    }
+  }
+
+  if (found_baud == 0u)
+  {
+    printf("[GNSS-UART] keine Baudrate liefert NMEA -- UART-Ausgabe des Moduls "
+           "vermutlich abgeschaltet oder Pins anders belegt.\r\n");
+    return APP_STATUS_ERROR;
+  }
+
+  printf("[GNSS-UART] Baudrate gefunden: %lu -- frage Firmware-Version ab.\r\n",
+         (unsigned long)found_baud);
+  u->Init.BaudRate = found_baud;
+  (void)HAL_UART_Init(u);
+
+  uint32_t answers = 0;
+  for (uint32_t i = 0; i < (sizeof(queries) / sizeof(queries[0])); ++i)
+  {
+    char frame[GNSS_CMD_MAX_LEN];
+    uint8_t crc = 0;
+    uint32_t n = 0;
+    uint32_t hits = 0;
+
+    frame[n++] = '$';
+    for (const char *p = queries[i]; *p != '\0'; ++p)
+    {
+      crc ^= (uint8_t)*p;
+      frame[n++] = *p;
+    }
+    frame[n++] = '*';
+    frame[n++] = gnss_hex[(crc >> 4) & 0x0Fu];
+    frame[n++] = gnss_hex[crc & 0x0Fu];
+    frame[n++] = '\r';
+    frame[n++] = '\n';
+
+    if (HAL_UART_Transmit(u, (uint8_t *)frame, (uint16_t)n, 500) != HAL_OK)
+    {
+      printf("[GNSS-UART] Senden von $%s fehlgeschlagen.\r\n", queries[i]);
+      continue;
+    }
+    (void)gnss_uart_listen(u, GNSS_CMD_ANSWER_MS, NULL, &hits);
+    answers += hits;
+  }
+
+  if (answers == 0u)
+  {
+    printf("[GNSS-UART] Modul sendet NMEA, antwortet aber nicht auf die "
+           "Versionsabfrage.\r\n");
+    return APP_STATUS_ERROR;
+  }
+  return APP_STATUS_OK;
 }
 
 /* Gibt die erste vollstaendige NMEA-Zeile aus dem Puffer aus. */

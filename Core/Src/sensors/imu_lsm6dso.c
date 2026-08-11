@@ -11,14 +11,44 @@
 #define LSM6DSO_REG_CTRL1_XL  0x10u
 #define LSM6DSO_REG_CTRL2_G   0x11u
 #define LSM6DSO_REG_CTRL3_C   0x12u
+#define LSM6DSO_REG_CTRL4_C   0x13u
+#define LSM6DSO_REG_CTRL6_C   0x15u
+#define LSM6DSO_REG_CTRL8_XL  0x17u
 #define LSM6DSO_REG_OUTX_L_G  0x22u  /* ab hier: Gyro XYZ, dann Accel XYZ */
 
 #define LSM6DSO_WHO_AM_I_VAL  0x6Cu
 #define LSM6DSO_SPI_READ_BIT  0x80u
 
-#define LSM6DSO_CTRL1_XL_VAL  0x44u  /* ODR 104 Hz, FS +/-16 g */
+/* ---------------------------------------------------------------------------
+ * Anti-Aliasing-Auslegung (Datenblatt DS12140 Rev 2)
+ *
+ * Die Messschleife liest den Sensor mit 50 Hz aus. Nach dem Abtasttheorem
+ * lassen sich damit nur Signale bis 25 Hz korrekt abbilden. Alles darueber
+ * verschwindet nicht, sondern erscheint in den Daten als falsche, langsamere
+ * Schwingung (Aliasing). Die sensorinternen Tiefpaesse muessen deshalb
+ * unterhalb von 25 Hz begrenzen -- sonst faltet sich z. B. Rahmenvibration
+ * in den Bremsverlauf hinein.
+ *
+ * Beschleunigung: Ohne LPF2 liegt die Bandbreite bei ODR/2 (Tabelle 65),
+ * bei 104 Hz also 52 Hz -- deutlich zu hoch. Gewaehlt: ODR 208 Hz mit
+ * LPF2 auf ODR/10 = 20,8 Hz. Die hoehere ODR ist Absicht: Sie erlaubt es,
+ * mit den verfuegbaren Teilerstufen dicht unter die 25-Hz-Grenze zu kommen
+ * (bei 104 Hz waeren nur ODR/4 = 26 Hz oder ODR/10 = 10,4 Hz moeglich --
+ * einmal knapp darueber, einmal unnoetig stark gefiltert).
+ *
+ * Drehrate: LPF1 freigeben (LPF1_SEL_G) und FTYPE = 110 waehlen; das ergibt
+ * laut Tabelle 60 bei ODR 104 Hz genau 19,0 Hz.
+ *
+ * Der 400-g-Sensor ADXL373 laesst sich NICHT entsprechend begrenzen: seine
+ * niedrigste Bandbreite ist 200 Hz bei minimal 400 Hz ODR. Siehe Hinweis
+ * in acc_adxl373.c.
+ * ------------------------------------------------------------------------ */
+#define LSM6DSO_CTRL1_XL_VAL  0x56u  /* ODR 208 Hz, FS +/-16 g, LPF2 aktiv */
 #define LSM6DSO_CTRL2_G_VAL   0x4Cu  /* ODR 104 Hz, FS +/-2000 dps */
 #define LSM6DSO_CTRL3_C_VAL   0x44u  /* BDU + Adress-Auto-Inkrement */
+#define LSM6DSO_CTRL4_C_VAL   0x02u  /* LPF1_SEL_G: Gyro-LPF1 freigeben */
+#define LSM6DSO_CTRL6_C_VAL   0x06u  /* FTYPE 110 -> 19,0 Hz bei ODR 104 Hz */
+#define LSM6DSO_CTRL8_XL_VAL  0x20u  /* HPCF_XL 001 -> LPF2 = ODR/10 = 20,8 Hz */
 
 /* Gyro-Bias-Kalibrierung beim Start: Jedes Gyroskop hat einen kleinen
  * Nullpunktfehler (zeigt Drehung an, obwohl nichts dreht). Beim Einschalten
@@ -103,8 +133,13 @@ app_status_t imu_lsm6dso_init(void)
 
   /* Messbetrieb konfigurieren -- der Sensor startet im Schlafmodus.
    * Reihenfolge: erst CTRL3_C (BDU + Auto-Inkrement als Grundverhalten),
-   * dann Accel und Gyro einschalten (je 104 Hz + Messbereich). */
+   * dann die Filter setzen (CTRL8_XL, CTRL4_C, CTRL6_C), zuletzt Accel und
+   * Gyro einschalten. Die Filter zuerst, damit ab dem ersten Messwert die
+   * endgueltige Bandbreite gilt und keine ungefilterten Daten anfallen. */
   if (imu_lsm6dso_write_reg(board, LSM6DSO_REG_CTRL3_C, LSM6DSO_CTRL3_C_VAL) != APP_STATUS_OK ||
+      imu_lsm6dso_write_reg(board, LSM6DSO_REG_CTRL8_XL, LSM6DSO_CTRL8_XL_VAL) != APP_STATUS_OK ||
+      imu_lsm6dso_write_reg(board, LSM6DSO_REG_CTRL4_C, LSM6DSO_CTRL4_C_VAL) != APP_STATUS_OK ||
+      imu_lsm6dso_write_reg(board, LSM6DSO_REG_CTRL6_C, LSM6DSO_CTRL6_C_VAL) != APP_STATUS_OK ||
       imu_lsm6dso_write_reg(board, LSM6DSO_REG_CTRL1_XL, LSM6DSO_CTRL1_XL_VAL) != APP_STATUS_OK ||
       imu_lsm6dso_write_reg(board, LSM6DSO_REG_CTRL2_G, LSM6DSO_CTRL2_G_VAL) != APP_STATUS_OK)
   {
@@ -112,7 +147,8 @@ app_status_t imu_lsm6dso_init(void)
     return APP_STATUS_ERROR;
   }
 
-  printf("[LSM6DSO] erkannt und konfiguriert (104 Hz, +/-16 g, +/-2000 dps).\r\n");
+  printf("[LSM6DSO] erkannt und konfiguriert (Accel 208 Hz / Tiefpass 20,8 Hz, "
+         "Gyro 104 Hz / Tiefpass 19,0 Hz, +/-16 g, +/-2000 dps).\r\n");
   imu_lsm6dso_ready = true;
 
   /* Gyro-Bias im Stand messen (~2 s): erste Samples verwerfen (Filter

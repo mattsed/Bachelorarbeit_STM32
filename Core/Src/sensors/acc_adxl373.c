@@ -18,8 +18,24 @@
 #define ADXL373_DEVID_AD_VAL    0xADu
 #define ADXL373_DEVID_MST_VAL   0x1Du
 
-#define ADXL373_TIMING_VAL      0x00u  /* ODR 400 Hz */
-#define ADXL373_MEASURE_VAL     0x00u  /* Bandbreite 200 Hz */
+/* Beide Werte stehen bereits auf der NIEDRIGSTEN Stufe, die der Baustein
+ * anbietet: TIMING-ODR kennt nur 400/800/1600/3200/6400 Hz, MEASURE-
+ * Bandbreite nur 200/400/800/1600/3200 Hz.
+ *
+ * Folge fuers Anti-Aliasing: Die Messschleife liest mit 50 Hz aus, korrekt
+ * abbildbar sind damit nur Signale bis 25 Hz. Die 200 Hz Sensorbandbreite
+ * liegen weit darueber -- Anteile zwischen 25 und 200 Hz (Stoesse,
+ * Rahmenvibration) falten sich als scheinbar langsamere Schwingungen in die
+ * Daten. Anders als beim LSM6DSO laesst sich das hier NICHT per Register
+ * beheben; der ADXL373 ist als Stossaufnehmer ausgelegt, nicht fuer
+ * schmalbandige Messungen.
+ *
+ * Konsequenz fuer die Auswertung: Die Spalten acc400_* taugen als
+ * Stoss-/Spitzenwertanzeige (siehe Spitzenwertverfolgung weiter unten),
+ * NICHT als sauber abgetasteter Signalverlauf. Wer den Verlauf braucht,
+ * muesste den Sensor ueber seinen FIFO mit voller Rate auslesen. */
+#define ADXL373_TIMING_VAL      0x00u  /* ODR 400 Hz (niedrigste Stufe) */
+#define ADXL373_MEASURE_VAL     0x00u  /* Bandbreite 200 Hz (niedrigste Stufe) */
 /* Bit 0-1 Mode=11 (Full-Bandwidth-Messbetrieb), Bit 2 HPF_DIS=1: der
  * eingebaute Hochpass wuerde die Erdbeschleunigung als "langsam driftenden
  * Fehler" herausfiltern. Fuer einen Stoss-/Impaktsensor ist die AC-Kopplung

@@ -140,6 +140,20 @@ app_status_t app_init(void)
    * meldet seinen Status selbst per printf auf der Konsole. */
   (void)board_init();
   (void)gnss_init();
+
+  /* Bring-up-Diagnose: Firmware-Version des GNSS-Moduls abfragen. Stand
+   * 11.08.2026 deaktiviert -- der Teseo nimmt I2C-Schreibzugriffe in der
+   * Werkskonfiguration nicht an (Analyse im Kommentar bei
+   * gnss_send_command in gnss.c). Zum Weitersuchen einkommentieren. */
+  /* (void)gnss_query_version(); */
+
+  /* Bring-up des UART-Wegs zum Teseo (Baudratensuche + Versionsabfrage).
+   * Stand 11.08.2026 deaktiviert: An PB7 kommt bei keiner Baudrate ein
+   * Signal an -- nicht einmal Rahmenfehler, also gar keine Flanken. Der
+   * Teseo-UART ist ueber den Arduino-Header derzeit nicht durchverbunden
+   * (Loetbruecke/Jumper auf Shield oder Nucleo). Erst wieder einkommen-
+   * tieren, wenn die Verbindung hergestellt ist. */
+  /* (void)gnss_uart_bringup(); */
   (void)brake_pressure_init();
   (void)imu_lsm6dso_init();
   (void)acc_adxl373_init();

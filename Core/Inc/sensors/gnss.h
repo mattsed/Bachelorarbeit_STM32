@@ -21,6 +21,21 @@ app_status_t gnss_read(gnss_data_t *data);
 /* Meldet, ob das GNSS-Modul initialisiert ist und Daten liefern kann. */
 bool gnss_is_ready(void);
 
+/* Sendet einen proprietaeren NMEA-Befehl an das Modul. Uebergeben wird nur
+ * der Rumpf zwischen '$' und '*', z. B. "PSTMSETPAR,1303,0.2,0" fuer 5 Hz;
+ * Pruefsumme und Zeilenende ergaenzt die Funktion selbst. */
+app_status_t gnss_send_command(const char *body);
+
+/* Fragt die Firmware-Version ab und gibt die Antwort per printf aus.
+ * Blockiert dabei rund 2 s -- nur aus app_init() aufrufen, also bevor der
+ * Watchdog scharf geschaltet wird. */
+app_status_t gnss_query_version(void);
+
+/* Bring-up des UART-Wegs zum Teseo (LPUART1, PB6/PB7 ueber die Arduino-
+ * Pins D0/D1): sucht die Baudrate des Moduls und fragt dort die
+ * Firmware-Version ab. Blockiert mehrere Sekunden -- nur aus app_init(). */
+app_status_t gnss_uart_bringup(void);
+
 /* Liefert das zuletzt empfangene UTC-Datum und die UTC-Zeit (fuer die
  * Datei-Zeitstempel auf der microSD). false = noch kein Datum empfangen. */
 bool gnss_get_utc_datetime(uint16_t *year, uint8_t *month, uint8_t *day,
