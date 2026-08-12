@@ -71,8 +71,6 @@ void Error_Handler(void);
 #define TRACE_D3_GPIO_Port GPIOE
 #define STLK_MCO_Pin GPIO_PIN_0
 #define STLK_MCO_GPIO_Port GPIOH
-#define BLE_CS_Pin GPIO_PIN_0
-#define BLE_CS_GPIO_Port GPIOC
 #define RMII_MDC_Pin GPIO_PIN_1
 #define RMII_MDC_GPIO_Port GPIOC
 #define PSS_FRONT_Pin GPIO_PIN_0
@@ -85,8 +83,6 @@ void Error_Handler(void);
 #define PSS_BACK_GPIO_Port GPIOA
 #define VBUS_SENSE_Pin GPIO_PIN_4
 #define VBUS_SENSE_GPIO_Port GPIOA
-#define BLE_IRQ_Pin GPIO_PIN_6
-#define BLE_IRQ_GPIO_Port GPIOA
 #define RMII_CRS_DV_Pin GPIO_PIN_7
 #define RMII_CRS_DV_GPIO_Port GPIOA
 #define RMII_RXD0_Pin GPIO_PIN_4
@@ -119,8 +115,6 @@ void Error_Handler(void);
 #define IMU_CS_GPIO_Port GPIOD
 #define RMII_TXT_EN_Pin GPIO_PIN_11
 #define RMII_TXT_EN_GPIO_Port GPIOG
-#define BLE_RESET_Pin GPIO_PIN_12
-#define BLE_RESET_GPIO_Port GPIOG
 #define RMI_TXD0_Pin GPIO_PIN_13
 #define RMI_TXD0_GPIO_Port GPIOG
 #define SWO_Pin GPIO_PIN_3
