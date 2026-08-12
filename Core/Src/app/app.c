@@ -4,7 +4,6 @@
 #include <string.h>
 
 #include "board/board.h"
-#include "comms/ble_bluenrg.h"
 #include "sensors/acc_adxl373.h"
 #include "sensors/brake_pressure.h"
 #include "sensors/gnss.h"
@@ -158,7 +157,6 @@ app_status_t app_init(void)
   (void)imu_lsm6dso_init();
   (void)acc_adxl373_init();
   (void)storage_logger_init();
-  (void)ble_bluenrg_init();
 
   if (storage_logger_is_available())
   {
@@ -187,10 +185,8 @@ void app_run(void)
    * aus, haengt die Firmware und der Watchdog resettet den MCU. */
   IWDG->KR = APP_IWDG_KEY_REFRESH;
 
-  /* Hintergrundaufgaben: NMEA-Strom leeren, BLE-Ereignisse abholen,
-   * Start/Stopp-Knopf auswerten. */
+  /* Hintergrundaufgaben: NMEA-Strom leeren, Start/Stopp-Knopf auswerten. */
   (void)gnss_poll();
-  (void)ble_bluenrg_poll();
   app_check_user_button();
 
   uint32_t now = HAL_GetTick();
