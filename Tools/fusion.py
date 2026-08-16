@@ -149,6 +149,13 @@ def lagefilter(df: pd.DataFrame, beta: float = MADGWICK_BETA) -> pd.DataFrame:
 
     df["roll_deg"] = roll
     df["pitch_deg"] = pitch
+
+    # Alle drei Achsen der neigungsbereinigten Beschleunigung ablegen, nicht
+    # nur die ausgewaehlte: kalibrierung.py braucht sie, um FAHRT_ACHSE und
+    # FAHRT_VORZEICHEN gegen die GNSS-Geschwindigkeit zu bestimmen.
+    for name, spalte in (("x", 0), ("y", 1), ("z", 2)):
+        df[f"a_lin_{name}_ms2"] = a_lin[:, spalte] * G_M_S2
+
     achse = {"x": 0, "y": 1, "z": 2}[FAHRT_ACHSE]
     df["a_laengs_ms2"] = FAHRT_VORZEICHEN * a_lin[:, achse] * G_M_S2
 
