@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "stm32h5xx_nucleo.h"   /* BSP_LED_* fuer die gelbe Fix-Anzeige (LD2) */
+
 #include "board/board.h"
 #include "sensors/acc_adxl373.h"
 #include "sensors/brake_pressure.h"
@@ -74,6 +76,50 @@ static void app_watchdog_start(void)
  * und bootet zurueck in den Bereit-Zustand. Waehrend der Aufzeichnung
  * macht B1 bewusst nichts (kein versehentlicher Stopp am Lenker).
  * Ausgewertet wird der entprellte Wechsel auf "gedrueckt" (Pegel high). */
+/* Gelbe LED (LD2) zeigt den GNSS-Fix an: an = gueltige Position, aus = kein
+ * Fix. Zusaetzlich meldet die Konsole jeden Wechsel -- aber nur den Wechsel,
+ * damit sie im Dauerbetrieb lesbar bleibt.
+ *
+ * WARUM: Ohne diese Anzeige merkt man erst am PC, dass die Aufzeichnung vor
+ * dem ersten Fix gestartet wurde. gnss_read() liefert dann NOT_READY bzw.
+ * fix_valid = 0, und weil app_run() den Datensatz vorher nullt, bleiben
+ * fix, lat, lon, v und utc der betroffenen Zeilen komplett auf 0. */
+static void app_update_gnss_indicator(void)
+{
+  static bool last_fix = false;
+  static bool first_call = true;
+
+  bool fix = gnss_has_fix();
+
+  if (!first_call && fix == last_fix)
+  {
+    return;
+  }
+  first_call = false;
+  last_fix = fix;
+
+  if (fix)
+  {
+    BSP_LED_On(LED_YELLOW);
+    printf("[GNSS] Fix erhalten -- Position gueltig, Aufzeichnung sinnvoll.\r\n");
+  }
+  else
+  {
+    BSP_LED_Off(LED_YELLOW);
+    /* Unterscheiden, ob nur der Fix fehlt (warten hilft) oder das Modul gar
+     * nicht antwortet (Hardware/Power-Cycle noetig) -- das ist der
+     * Unterschied zwischen "gleich gehts los" und "so wird das nichts". */
+    if (gnss_is_ready())
+    {
+      printf("[GNSS] kein Fix -- GNSS-Spalten der CSV bleiben 0.\r\n");
+    }
+    else
+    {
+      printf("[GNSS] Modul nicht bereit -- gar keine Positionsdaten.\r\n");
+    }
+  }
+}
+
 static void app_check_user_button(void)
 {
   static GPIO_PinState stable_state = GPIO_PIN_RESET;
@@ -117,6 +163,13 @@ static void app_check_user_button(void)
       if (storage_logger_start() == APP_STATUS_OK)
       {
         printf("[App] Aufzeichnung gestartet -- Stopp per RESET-Knopf.\r\n");
+        /* Bewusst nur warnen, nicht blockieren: am Berg ist eine Fahrt ohne
+         * GNSS immer noch besser als keine Aufzeichnung. */
+        if (!gnss_has_fix())
+        {
+          printf("[App] WARNUNG: noch kein GNSS-Fix (gelbe LED aus) -- "
+                 "Position und Geschwindigkeit fehlen bis zum ersten Fix.\r\n");
+        }
       }
     }
     /* Waehrend laufender Aufzeichnung macht B1 nichts (Stopp per RESET). */
@@ -140,6 +193,13 @@ app_status_t app_init(void)
   (void)board_init();
   (void)gnss_init();
 
+  /* Diagnose 16.08.2026: schneidet den rohen NMEA-Strom mit und zaehlt die
+   * Satzarten. Hat gezeigt, dass RMC sauber ankommt und der Fix nach wenigen
+   * Sekunden kommt -- die leeren GNSS-Spalten kamen also vom Start VOR dem
+   * ersten Fix, nicht vom Parser. Blockiert 10 s, daher normalerweise aus;
+   * zum Nachsehen des Satzprofils wieder einkommentieren. */
+  /* (void)gnss_dump_stream(10000u); */
+
   /* Bring-up-Diagnose: Firmware-Version des GNSS-Moduls abfragen. Stand
    * 11.08.2026 deaktiviert -- der Teseo nimmt I2C-Schreibzugriffe in der
    * Werkskonfiguration nicht an (Analyse im Kommentar bei
@@ -147,11 +207,15 @@ app_status_t app_init(void)
   /* (void)gnss_query_version(); */
 
   /* Bring-up des UART-Wegs zum Teseo (Baudratensuche + Versionsabfrage).
-   * Stand 11.08.2026 deaktiviert: An PB7 kommt bei keiner Baudrate ein
-   * Signal an -- nicht einmal Rahmenfehler, also gar keine Flanken. Der
-   * Teseo-UART ist ueber den Arduino-Header derzeit nicht durchverbunden
-   * (Loetbruecke/Jumper auf Shield oder Nucleo). Erst wieder einkommen-
-   * tieren, wenn die Verbindung hergestellt ist. */
+   * Am 11.08.2026 lieferte das an PB7 keinerlei Flanken. Ursache am
+   * 16.08.2026 gefunden: R3 auf dem X-NUCLEO-LIV4A1 ist unbestueckt und
+   * unterbricht die Leitung Modul-TX -> Arduino-Header (am Board sichtbar
+   * bestaetigt).
+   *
+   * Seit dem UART-Umbau ueberfluessig: gnss_init() sucht die Baudrate
+   * selbst und waehlt UART als Quelle, sobald dort NMEA ankommt. Diese
+   * Funktion bleibt nur als Diagnose stehen (sie fragt zusaetzlich die
+   * Firmware-Version ab). */
   /* (void)gnss_uart_bringup(); */
   (void)brake_pressure_init();
   (void)imu_lsm6dso_init();
@@ -185,8 +249,10 @@ void app_run(void)
    * aus, haengt die Firmware und der Watchdog resettet den MCU. */
   IWDG->KR = APP_IWDG_KEY_REFRESH;
 
-  /* Hintergrundaufgaben: NMEA-Strom leeren, Start/Stopp-Knopf auswerten. */
+  /* Hintergrundaufgaben: NMEA-Strom leeren, Fix-Anzeige nachfuehren,
+   * Start/Stopp-Knopf auswerten. */
   (void)gnss_poll();
+  app_update_gnss_indicator();
   app_check_user_button();
 
   uint32_t now = HAL_GetTick();

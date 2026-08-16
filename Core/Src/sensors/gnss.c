@@ -27,11 +27,28 @@
 #define GNSS_SCL_PIN            GPIO_PIN_8
 #define GNSS_SDA_PIN            GPIO_PIN_9
 
-/* TIMINGR fuer 4-MHz-Kerneltakt: PRESC=0, SCLL=5 (1,5 us low), SCLH=2
- * (0,75 us high), SCLDEL=1, SDADEL=1 -> ca. 380 kHz (Fast-Mode). */
-#define GNSS_I2C_TIMINGR        0x00110205u
+/* TIMINGR fuer 4-MHz-Kerneltakt (CSI), t_PRESC = 250 ns.
+ *
+ * Standard-Mode ~111 kHz: PRESC=0, SCLL=19 (5,0 us low), SCLH=15 (4,0 us
+ * high), SDADEL=2, SCLDEL=4.
+ *
+ * WARUM langsam: Auf dem X-NUCLEO-LIV4A1 sitzen laut Schaltplan KEINE
+ * I2C-Pull-ups -- die einzigen 4,7k gehoeren zu den Tastern WAKEUP und
+ * nRESET. Der Bus haengt damit an den internen Pull-ups des STM32 (~40 kOhm).
+ * Deren Anstiegszeit (Groessenordnung 1 us) sprengt die 300 ns, die der
+ * Fast-Mode erlaubt, und lag ueber der SCL-High-Phase von 0,75 us bei den
+ * frueheren 380 kHz. Standard-Mode erlaubt 1000 ns Anstiegszeit und gibt
+ * dem Pegel viermal mehr Zeit -- Test vom 16.08.2026 gegen die sporadischen
+ * Abrisse des NMEA-Stroms.
+ * Vorheriger Wert (ca. 380 kHz, Fast-Mode): 0x00110205 */
+#define GNSS_I2C_TIMINGR        0x00420F13u
 #define GNSS_I2C_FLAG_TIMEOUT_MS 5u
-#define GNSS_I2C_CHUNK          32u
+/* Blockgroesse: Bei 100 kHz dauert ein Byte rund 90 us, ein 64-Byte-Block
+ * also ~5,8 ms. Mehr darf ein Lesevorgang nicht blockieren, sonst reisst
+ * die 20-ms-Messtaktung. Die 180 Byte aus STs Referenzcode (AN5203) waeren
+ * hier 16 ms -- untragbar. 64 Byte alle 12 ms ergeben 5,3 kB/s und damit
+ * das Sechsfache dessen, was der Teseo mit ~0,84 kB/s nachlegt. */
+#define GNSS_I2C_CHUNK          64u
 /* Grosszuegig bemessen: nach einem Board-Reset bootet auch der Teseo neu
  * (Reset-Netz der Shields) und braucht 1..2 s, bis NMEA wieder laeuft. */
 #define GNSS_COLLECT_TIMEOUT_MS 6000u
@@ -40,6 +57,106 @@
 /* Wird true, sobald der GNSS-Treiber initialisiert ist und verwertbare Daten
  * liefern kann. */
 static bool gnss_ready = false;
+
+/* ==========================================================================
+ * Datenquelle: UART bevorzugt, I2C als Rueckfallebene
+ * ==========================================================================
+ * Der Teseo gibt denselben NMEA-Strom parallel ueber beide Schnittstellen
+ * aus -- AN5203, Kapitel 1: "The standard NMEA over I2C interface is a
+ * mirror of NMEA over UART interface".
+ *
+ * WARUM UART bevorzugt (Befund 16.08.2026): Der I2C-Slave des Moduls stellt
+ * nach 26..138 s reproduzierbar den Betrieb ein und quittiert seine Adresse
+ * nicht mehr, waehrend der GNSS-Kern normal weiterlaeuft (PPS-LED blinkt).
+ * Weder Bus-Befreiung noch Peripheral-Neuaufbau noch Board-Reset holen ihn
+ * zurueck -- nur ein Power-Cycle. Getestet und ausgeschlossen wurden zudem
+ * Zugriffsmuster (200 -> 40 Transaktionen/s) und Busgeschwindigkeit
+ * (380 -> 111 kHz). UART kennt diese Fehlerklasse nicht: kein Adressabgleich,
+ * keine Slave-Zustandsmaschine, nichts, was sich verklemmen koennte.
+ *
+ * HARDWARE: Auf dem X-NUCLEO-LIV4A1 ist R3 in der Leitung Modul-TX ->
+ * Arduino-Header unbestueckt (am Board bestaetigt). Der UART-Weg
+ * funktioniert erst mit einer Bruecke von TP1 (direkt am Modulpin
+ * UART-TX) auf Arduino-Pin D0 = PB7.
+ */
+typedef enum {
+  GNSS_SRC_NONE = 0,
+  GNSS_SRC_UART,
+  GNSS_SRC_I2C
+} gnss_source_t;
+
+static gnss_source_t gnss_source = GNSS_SRC_NONE;
+static uint32_t gnss_uart_baud = 0;
+
+/* Empfang per Interrupt in einen Ringpuffer -- bewusst NICHT pollend:
+ * Waehrend eines SD-Schreibzugriffs steht die Hauptschleife einige zehn
+ * Millisekunden. Bei 9600 Baud kommt alle ~1 ms ein Byte, und das
+ * Empfangsregister fasst genau eines (FIFO ist in main.c abgeschaltet).
+ * Ohne Interrupt gingen die Bytes jedes Schreibvorgangs verloren. */
+#define GNSS_RX_RING_LEN  512u
+
+static volatile uint8_t  gnss_rx_ring[GNSS_RX_RING_LEN];
+static volatile uint16_t gnss_rx_head = 0;   /* schreibt der Interrupt */
+static volatile uint16_t gnss_rx_tail = 0;   /* liest gnss_poll()      */
+static volatile uint32_t gnss_rx_lost = 0;   /* Ringpuffer war voll    */
+
+/* Interrupt-Handler fuer LPUART1. In stm32h5xx_it.c existiert keiner --
+ * der LPUART1-Interrupt war in CubeMX nie aktiviert -- daher hier. */
+void LPUART1_IRQHandler(void)
+{
+  uint32_t isr = LPUART1->ISR;
+
+  /* Fehlerflags zuerst quittieren: Ein stehendes Overrun-Flag blockiert
+   * den weiteren Empfang. Framing-/Noise-Fehler treten bei falscher
+   * Baudrate massenhaft auf und duerfen den Handler nicht aufhalten. */
+  if ((isr & (USART_ISR_ORE | USART_ISR_FE | USART_ISR_NE | USART_ISR_PE)) != 0u)
+  {
+    LPUART1->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
+  }
+
+  while ((LPUART1->ISR & USART_ISR_RXNE) != 0u)
+  {
+    uint8_t b = (uint8_t)LPUART1->RDR;
+    uint16_t next = (uint16_t)((gnss_rx_head + 1u) % GNSS_RX_RING_LEN);
+
+    if (next != gnss_rx_tail)
+    {
+      gnss_rx_ring[gnss_rx_head] = b;
+      gnss_rx_head = next;
+    }
+    else
+    {
+      ++gnss_rx_lost;   /* Puffer voll -- Byte verwerfen, nie blockieren */
+    }
+  }
+}
+
+/* Abriss-Erkennung: Der Teseo sendet seine NMEA-Buendel im Sekundentakt;
+ * dazwischen liefert er nur 0xFF-Fuellbytes (die read_chunk verwirft).
+ * Mehrere Sekunden ohne ein einziges Nutzbyte bedeuten deshalb: Verbindung
+ * tot. Beobachtet am 16.08.2026 (LOG_034): I2C-Strom riss nach 26 s ab,
+ * waehrend das Modul selbst weiterlief (PPS-LED blinkte weiter) -- ohne
+ * diese Erkennung blieb fix_valid einfach auf dem letzten Stand stehen und
+ * die CSV meldete 4 Minuten lang eine eingefrorene Position als gueltig. */
+#define GNSS_STREAM_TIMEOUT_MS  3000u
+#define GNSS_RECOVER_PERIOD_MS  5000u
+
+static uint32_t gnss_last_rx_ms = 0;      /* letztes echtes Nutzbyte */
+static uint32_t gnss_next_recover_ms = 0; /* naechster Wiederbelebungsversuch */
+static bool gnss_stream_lost = false;     /* Meldung nur auf der Flanke */
+
+/* Diagnose des Abrisses: Lief die letzte Lesetransaktion sauber durch (dann
+ * quittiert das Modul weiter, liefert aber nur 0xFF-Fuellbytes -- der
+ * GNSS-Kern fuellt den I2C-Puffer nicht mehr), oder brach sie mit NACK bzw.
+ * Timeout ab (dann ist der I2C-Slave des Moduls selbst weg)? Genau diese
+ * Unterscheidung sagt uns, wo der Fehler sitzt. */
+static bool gnss_rx_bus_ok = false;
+static uint32_t gnss_recover_tries = 0;
+
+/* true, wenn der zuletzt gelesene Block auf einem 0xFF-Fuellbyte endete --
+ * nach STs Kriterium (AN5203) ist der I2C-Puffer des Moduls dann leer und
+ * weiteres Lesen bringt nichts mehr. */
+static bool gnss_rx_drained = false;
 
 /* Befreit einen haengenden I2C-Bus. Wird der MCU mitten in einer laufenden
  * Uebertragung resettet, haelt der Teseo SDA auf low und wartet auf
@@ -61,16 +178,31 @@ static void gnss_i2c_bus_clear(void)
   HAL_GPIO_WritePin(GPIOB, GNSS_SDA_PIN, GPIO_PIN_SET);
   HAL_Delay(1);
 
-  for (int i = 0; i < 9; ++i)
+  /* IMMER volle 9 Taktpulse geben, auch wenn SDA zwischendurch high ist:
+   * Der Teseo kann mitten in einem Byte stehen und gerade zufaellig eine 1
+   * ausgeben; ein vorzeitiger Abbruch laesst ihn dann zwischen zwei Bits
+   * stehen. Bis zu drei Runden, falls SDA danach immer noch festgehalten
+   * wird.
+   *
+   * HINWEIS 16.08.2026: Das ist spezifikationskonformer als der frueher hier
+   * stehende vorzeitige Abbruch, loest aber NICHT den beobachteten Fall,
+   * dass der Teseo nach einem Flash-Vorgang (STM32_Programmer_CLI mode=UR)
+   * gar nicht mehr auf seine Adresse antwortet. Dort haengt das Modul
+   * selbst, nicht der Bus -- es hilft nur ein Power-Cycle (USB abziehen).
+   * Ein normaler Reset (mode=HOTPLUG -hardRst) ist dagegen unkritisch. */
+  for (int round = 0; round < 3; ++round)
   {
+    for (int i = 0; i < 9; ++i)
+    {
+      HAL_GPIO_WritePin(GPIOB, GNSS_SCL_PIN, GPIO_PIN_RESET);
+      HAL_Delay(1);
+      HAL_GPIO_WritePin(GPIOB, GNSS_SCL_PIN, GPIO_PIN_SET);
+      HAL_Delay(1);
+    }
     if (HAL_GPIO_ReadPin(GPIOB, GNSS_SDA_PIN) == GPIO_PIN_SET)
     {
       break; /* Bus ist frei */
     }
-    HAL_GPIO_WritePin(GPIOB, GNSS_SCL_PIN, GPIO_PIN_RESET);
-    HAL_Delay(1);
-    HAL_GPIO_WritePin(GPIOB, GNSS_SCL_PIN, GPIO_PIN_SET);
-    HAL_Delay(1);
   }
 
   /* Stop-Bedingung: SDA-Flanke low -> high, waehrend SCL high ist. */
@@ -163,7 +295,10 @@ static bool gnss_i2c_probe(void)
 static uint32_t gnss_i2c_read_chunk(uint8_t *dst, uint32_t max)
 {
   uint32_t n = 0;
+  uint8_t last = 0;
 
+  gnss_rx_bus_ok = false;
+  gnss_rx_drained = false;
   I2C1->ICR = I2C_ICR_STOPCF | I2C_ICR_NACKCF;
   I2C1->CR2 = ((uint32_t)GNSS_I2C_ADDR << 1) | I2C_CR2_RD_WRN |
               (GNSS_I2C_CHUNK << I2C_CR2_NBYTES_Pos) |
@@ -179,6 +314,7 @@ static uint32_t gnss_i2c_read_chunk(uint8_t *dst, uint32_t max)
       return n;
     }
     uint8_t b = (uint8_t)I2C1->RXDR;
+    last = b;
     if (b != 0xFFu && n < max)
     {
       dst[n++] = b;
@@ -186,6 +322,8 @@ static uint32_t gnss_i2c_read_chunk(uint8_t *dst, uint32_t max)
   }
   (void)gnss_i2c_wait_flag(I2C_ISR_STOPF);
   I2C1->ICR = I2C_ICR_STOPCF;
+  gnss_rx_bus_ok = true;                 /* alle Bytes sauber uebertragen */
+  gnss_rx_drained = (last == 0xFFu);     /* Block endete auf Fuellbyte */
   return n;
 }
 
@@ -751,6 +889,102 @@ static void gnss_print_first_sentence(const uint8_t *buf, uint32_t len)
   }
 }
 
+/* Setzt LPUART1 auf die gewuenschte Baudrate und schaltet den
+ * Empfangs-Interrupt scharf. Der Ringpuffer wird dabei geleert. */
+static app_status_t gnss_uart_start(uint32_t baud)
+{
+  const board_interfaces_t *board = board_get_interfaces();
+  UART_HandleTypeDef *u = board->gnss_uart;
+
+  HAL_NVIC_DisableIRQ(LPUART1_IRQn);
+
+  u->Init.BaudRate = baud;
+  if (HAL_UART_Init(u) != HAL_OK)
+  {
+    return APP_STATUS_ERROR;
+  }
+
+  gnss_rx_head = 0;
+  gnss_rx_tail = 0;
+  gnss_rx_lost = 0;
+
+  LPUART1->CR1 |= USART_CR1_RXNEIE;
+  /* Prioritaet unterhalb der HAL-Tickinterrupts, aber hoch genug, um
+   * waehrend blockierender SPI-/SD-Zugriffe zuverlaessig zu greifen. */
+  HAL_NVIC_SetPriority(LPUART1_IRQn, 6, 0);
+  HAL_NVIC_EnableIRQ(LPUART1_IRQn);
+  return APP_STATUS_OK;
+}
+
+/* Horcht eine Zeit lang auf der eingestellten Baudrate und zaehlt, was im
+ * Ringpuffer landet. Rueckgabe: Anzahl '$' -- ab zwei Satzanfaengen gilt
+ * die Baudrate als gefunden (Rauschen erzeugt praktisch nie zwei davon). */
+static uint32_t gnss_uart_collect(uint32_t ms, uint32_t *bytes)
+{
+  uint32_t dollars = 0;
+  uint32_t total = 0;
+
+  HAL_Delay(ms);
+
+  while (gnss_rx_tail != gnss_rx_head)
+  {
+    char c = (char)gnss_rx_ring[gnss_rx_tail];
+    gnss_rx_tail = (uint16_t)((gnss_rx_tail + 1u) % GNSS_RX_RING_LEN);
+    ++total;
+    if (c == '$')
+    {
+      ++dollars;
+    }
+  }
+  if (bytes != NULL)
+  {
+    *bytes = total;
+  }
+  return dollars;
+}
+
+/* Sucht die Baudrate des Teseo. Reihenfolge nach Wahrscheinlichkeit:
+ * 9600 ist die Werkseinstellung der Teseo-Familie, 115200 die haeufigste
+ * Abweichung. Blockiert im schlimmsten Fall rund 8 s -- nur aus
+ * gnss_init() heraus aufrufen, also bevor der Watchdog scharf ist. */
+static bool gnss_uart_detect(void)
+{
+  /* 115200 zuerst: Das ist die Werkseinstellung des Teseo-LIV4F auf dem
+   * X-NUCLEO-LIV4A1 (gemessen 16.08.2026). Damit ist der Start nach 1,3 s
+   * durch statt nach 2,6 s. */
+  static const uint32_t bauds[] =
+      { 115200u, 9600u, 19200u, 38400u, 57600u, 230400u };
+
+  printf("[GNSS] suche NMEA auf LPUART1 (PB7)...\r\n");
+
+  for (uint32_t i = 0; i < (sizeof(bauds) / sizeof(bauds[0])); ++i)
+  {
+    uint32_t bytes = 0;
+
+    if (gnss_uart_start(bauds[i]) != APP_STATUS_OK)
+    {
+      continue;
+    }
+    uint32_t dollars = gnss_uart_collect(1300u, &bytes);
+    printf("[GNSS]   %6lu Baud: %4lu Bytes, %lu x '$'\r\n",
+           (unsigned long)bauds[i], (unsigned long)bytes,
+           (unsigned long)dollars);
+
+    if (dollars >= 2u)
+    {
+      gnss_uart_baud = bauds[i];
+      printf("[GNSS] NMEA ueber UART bei %lu Baud -- diese Quelle wird genutzt.\r\n",
+             (unsigned long)bauds[i]);
+      return true;
+    }
+  }
+
+  HAL_NVIC_DisableIRQ(LPUART1_IRQn);
+  printf("[GNSS] kein NMEA auf UART (Bruecke TP1 -> D0 gelegt?) -- "
+         "falle auf I2C zurueck.\r\n");
+  return false;
+}
+
 app_status_t gnss_init(void)
 {
   static uint8_t buf[GNSS_BUF_LEN];
@@ -758,6 +992,19 @@ app_status_t gnss_init(void)
   bool has_nmea = false;
 
   gnss_ready = false;
+  gnss_source = GNSS_SRC_NONE;
+
+  /* Schritt 0: UART bevorzugen -- siehe Begruendung oben bei gnss_source_t.
+   * Nur wenn dort nichts ankommt (Bruecke TP1 -> D0 fehlt), wird der
+   * bisherige I2C-Weg genommen. */
+  if (gnss_uart_detect())
+  {
+    gnss_source = GNSS_SRC_UART;
+    gnss_ready = true;
+    gnss_stream_lost = false;
+    gnss_last_rx_ms = HAL_GetTick();
+    return APP_STATUS_OK;
+  }
 
   /* Schritt 1: I2C1-Peripheral auf PB8/PB9 aufsetzen. */
   if (gnss_i2c_hw_init() != APP_STATUS_OK)
@@ -821,7 +1068,10 @@ app_status_t gnss_init(void)
   printf("[GNSS] Teseo-LIV4F ueber I2C erkannt, NMEA-Strom aktiv (%lu Bytes).\r\n",
          (unsigned long)len);
   gnss_print_first_sentence(buf, len);
+  gnss_source = GNSS_SRC_I2C;
   gnss_ready = true;
+  gnss_stream_lost = false;
+  gnss_last_rx_ms = HAL_GetTick();
   return APP_STATUS_OK;
 }
 
@@ -831,7 +1081,13 @@ app_status_t gnss_init(void)
  * ========================================================================== */
 
 #define GNSS_LINE_LEN     100u
-#define GNSS_POLL_GAP_MS  5u
+
+/* Lesetakt und Drain-Tiefe bei 100 kHz: ein 64-Byte-Block blockiert ~5,8 ms,
+ * daher nur EIN Block je Runde -- so bleibt die Schleife innerhalb der
+ * 20-ms-Messtaktung bedienbar. Alle 12 ms ergibt das 5,3 kB/s; ein
+ * 1-Hz-Buendel von rund 840 Byte ist nach etwa 13 Runden (160 ms) abgeholt. */
+#define GNSS_POLL_GAP_MS    12u
+#define GNSS_DRAIN_BLOCKS   1u
 
 static gnss_data_t gnss_last;      /* zuletzt geparster Stand */
 static char gnss_line[GNSS_LINE_LEN];
@@ -982,28 +1238,166 @@ static void gnss_feed_char(char c)
   }
 }
 
+/* Ratenbegrenzter Wiederbelebungsversuch: Bus befreien, I2C1 neu aufsetzen,
+ * Modul anpingen. true = Modul quittiert seine Adresse wieder. Blockiert im
+ * Fehlerfall einige Millisekunden (Bus-Clear-Taktpulse) -- bei einem alle
+ * 5 s stattfindenden Versuch kostet das hoechstens vereinzelte Samples. */
+typedef enum {
+  GNSS_REC_SKIPPED = 0,  /* Ratenbegrenzung -- gar nicht erst versucht */
+  GNSS_REC_FAILED,       /* versucht, Modul quittiert seine Adresse nicht */
+  GNSS_REC_OK            /* Adresse wird wieder quittiert */
+} gnss_recover_result_t;
+
+static gnss_recover_result_t gnss_try_recover(uint32_t now)
+{
+  if (now < gnss_next_recover_ms)
+  {
+    return GNSS_REC_SKIPPED;
+  }
+  gnss_next_recover_ms = now + GNSS_RECOVER_PERIOD_MS;
+  ++gnss_recover_tries;
+
+  if (gnss_source == GNSS_SRC_UART)
+  {
+    /* Beim UART gibt es keine Gegenstelle, die man anpingen koennte --
+     * hier hilft nur, das Peripheral neu aufzusetzen (etwa nach einem
+     * stehengebliebenen Fehlerflag). Ob wieder Daten kommen, zeigt erst
+     * der naechste Byteempfang. */
+    return (gnss_uart_start(gnss_uart_baud) == APP_STATUS_OK)
+             ? GNSS_REC_OK : GNSS_REC_FAILED;
+  }
+
+  if ((gnss_i2c_hw_init() == APP_STATUS_OK) && gnss_i2c_probe())
+  {
+    return GNSS_REC_OK;
+  }
+  return GNSS_REC_FAILED;
+}
+
 app_status_t gnss_poll(void)
 {
-  uint8_t chunk[32];
+  static uint8_t chunk[GNSS_I2C_CHUNK];
   uint32_t now = HAL_GetTick();
 
+  /* Modul war beim Start nicht erreichbar (oder ist endgueltig verloren
+   * gemeldet): trotzdem periodisch weiterprobieren -- ein spaeter dazu-
+   * gestecktes oder wieder aufgewachtes Modul wird so doch noch gefunden. */
   if (!gnss_ready)
   {
+    if (gnss_try_recover(now) == GNSS_REC_OK)
+    {
+      printf("[GNSS] Modul erreichbar -- Empfang laeuft an.\r\n");
+      gnss_ready = true;
+      gnss_stream_lost = false;
+      gnss_last_rx_ms = now;
+      gnss_line_len = 0;
+    }
     return APP_STATUS_NOT_READY;
   }
 
-  /* Lesetakt begrenzen: alle 5 ms ein 32-Byte-Block (~1 ms Buszeit) leert
-   * den NMEA-Strom (ca. 0,5 kB/s) locker, ohne die Hauptschleife zu bremsen. */
-  if ((now - gnss_last_poll_ms) < GNSS_POLL_GAP_MS)
+  uint32_t n = 0;
+
+  if (gnss_source == GNSS_SRC_UART)
   {
+    /* Der Interrupt hat schon gesammelt -- hier nur den Ringpuffer in den
+     * Parser leeren. Kostet keine Buszeit und blockiert nichts, deshalb
+     * jede Schleifenrunde statt im 12-ms-Takt. */
+    while (gnss_rx_tail != gnss_rx_head)
+    {
+      gnss_feed_char((char)gnss_rx_ring[gnss_rx_tail]);
+      gnss_rx_tail = (uint16_t)((gnss_rx_tail + 1u) % GNSS_RX_RING_LEN);
+      ++n;
+    }
+  }
+  else
+  {
+    if ((now - gnss_last_poll_ms) < GNSS_POLL_GAP_MS)
+    {
+      return APP_STATUS_OK;
+    }
+    gnss_last_poll_ms = now;
+
+    /* Lesemuster nach AN5203: Bloecke holen, bis das Modul nur noch
+     * Fuellbytes liefert. Nach hoechstens GNSS_DRAIN_BLOCKS Bloecken wird
+     * abgebrochen, damit ein einzelner Durchlauf die 20-ms-Messtaktung
+     * nicht sprengt -- der Rest kommt in der naechsten Runde. */
+    for (uint32_t block = 0; block < GNSS_DRAIN_BLOCKS; ++block)
+    {
+      uint32_t got = gnss_i2c_read_chunk(chunk, sizeof(chunk));
+      for (uint32_t i = 0; i < got; ++i)
+      {
+        gnss_feed_char((char)chunk[i]);
+      }
+      n += got;
+      if (!gnss_rx_bus_ok || gnss_rx_drained)
+      {
+        break;  /* Transaktion abgebrochen oder Puffer leer */
+      }
+    }
+  }
+
+  if (n > 0u)
+  {
+    gnss_last_rx_ms = now;
+    if (gnss_stream_lost)
+    {
+      gnss_stream_lost = false;
+      printf("[GNSS] NMEA-Strom wieder da.\r\n");
+    }
+    /* Geparst wurde bereits blockweise in der Leseschleife oben. */
     return APP_STATUS_OK;
   }
-  gnss_last_poll_ms = now;
 
-  uint32_t n = gnss_i2c_read_chunk(chunk, sizeof(chunk));
-  for (uint32_t i = 0; i < n; ++i)
+  /* Kein Nutzbyte -- zwischen zwei 1-Hz-Buendeln normal. Erst nach mehreren
+   * Sekunden Stille gilt die Verbindung als abgerissen. */
+  if ((now - gnss_last_rx_ms) > GNSS_STREAM_TIMEOUT_MS)
   {
-    gnss_feed_char((char)chunk[i]);
+    if (!gnss_stream_lost)
+    {
+      gnss_stream_lost = true;
+      /* Sofort als ungueltig markieren: CSV-Spalte fix und gelbe LED
+       * duerfen keinen veralteten Fix weitermelden. Halb gesammelte
+       * NMEA-Zeile verwerfen, damit sie nicht mit dem spaeteren, mitten
+       * im Satz einsetzenden Strom verklebt. */
+      gnss_last.fix_valid = false;
+      gnss_line_len = 0;
+      gnss_recover_tries = 0;
+      if (gnss_source == GNSS_SRC_UART)
+      {
+        printf("[GNSS] NMEA-Strom abgerissen (>%lu ms nichts) -- fix=0. "
+               "Quelle UART, %lu Byte im Ringpuffer verloren.\r\n",
+               (unsigned long)GNSS_STREAM_TIMEOUT_MS,
+               (unsigned long)gnss_rx_lost);
+      }
+      else
+      {
+        printf("[GNSS] NMEA-Strom abgerissen (>%lu ms nichts) -- fix=0. "
+               "Lesezugriff: %s\r\n",
+               (unsigned long)GNSS_STREAM_TIMEOUT_MS,
+               gnss_rx_bus_ok ? "quittiert, aber nur 0xFF-Fuellbytes"
+                              : "bricht ab (NACK/Timeout)");
+      }
+    }
+    /* WICHTIG: nur auf einen tatsaechlich durchgefuehrten Versuch reagieren.
+     * Ein frueher hier stehendes "else" traf auch den ratenbegrenzten Fall
+     * und gab die Meldung in JEDER Schleifenrunde aus -- der printf-Sturm
+     * hat die 50-Hz-Abtastung lahmgelegt. */
+    gnss_recover_result_t rec = gnss_try_recover(now);
+    if (rec == GNSS_REC_OK)
+    {
+      /* Adresse wird wieder quittiert: Zaehler neu aufziehen und auf den
+       * naechsten NMEA-Burst warten. Kommt keiner, meldet der Timeout den
+       * Abriss erneut und der naechste Versuch folgt. */
+      gnss_last_rx_ms = now;
+      printf("[GNSS] I2C wiederhergestellt (Versuch %lu) -- warte auf NMEA.\r\n",
+             (unsigned long)gnss_recover_tries);
+    }
+    else if ((rec == GNSS_REC_FAILED) && ((gnss_recover_tries % 12u) == 1u))
+    {
+      /* Bei 5 s Versuchsabstand etwa jede Minute ein Lebenszeichen. */
+      printf("[GNSS] Wiederbelebung erfolglos (Versuch %lu, Modul quittiert "
+             "seine Adresse nicht).\r\n", (unsigned long)gnss_recover_tries);
+    }
   }
   return APP_STATUS_OK;
 }
@@ -1039,4 +1433,126 @@ bool gnss_get_utc_datetime(uint16_t *year, uint8_t *month, uint8_t *day,
 bool gnss_is_ready(void)
 {
   return gnss_ready;
+}
+
+bool gnss_has_fix(void)
+{
+  return gnss_ready && gnss_last.fix_valid;
+}
+
+/* ==========================================================================
+ * Diagnose: rohen NMEA-Strom mitlesen
+ * ==========================================================================
+ * Hintergrund: gnss_feed_char() wertet AUSSCHLIESSLICH RMC-Saetze aus.
+ * Fehlt RMC im Ausgabeprofil des Moduls, bleiben fix, lat, lon und v
+ * dauerhaft 0 -- auch dann, wenn das Modul einen gueltigen Fix hat und die
+ * rote PPS-LED auf dem Shield blinkt. Dieser Mitschnitt zeigt, welche
+ * Satzarten wirklich ankommen und ob darin ein Fix gemeldet wird.
+ */
+app_status_t gnss_dump_stream(uint32_t duration_ms)
+{
+  char line[GNSS_LINE_LEN];
+  static uint8_t chunk[GNSS_I2C_CHUNK];
+  uint32_t len = 0;
+  uint32_t lines = 0;
+  uint32_t n_rmc = 0, n_gga = 0, n_gsa = 0, n_gsv = 0, n_other = 0;
+
+  if (!gnss_ready)
+  {
+    printf("[GNSS-Dump] Modul nicht bereit -- nichts mitzulesen.\r\n");
+    return APP_STATUS_NOT_READY;
+  }
+
+  printf("[GNSS-Dump] lese %lu ms lang den rohen NMEA-Strom mit...\r\n",
+         (unsigned long)duration_ms);
+
+  uint32_t bytes_total = 0;
+  uint32_t start = HAL_GetTick();
+  while ((HAL_GetTick() - start) < duration_ms)
+  {
+    uint32_t n = 0;
+
+    /* Quelle beachten: Beim UART hat der Interrupt schon gesammelt, beim
+     * I2C muss aktiv gelesen werden. */
+    if (gnss_source == GNSS_SRC_UART)
+    {
+      while ((gnss_rx_tail != gnss_rx_head) && (n < GNSS_I2C_CHUNK))
+      {
+        chunk[n++] = gnss_rx_ring[gnss_rx_tail];
+        gnss_rx_tail = (uint16_t)((gnss_rx_tail + 1u) % GNSS_RX_RING_LEN);
+      }
+    }
+    else
+    {
+      n = gnss_i2c_read_chunk(chunk, sizeof(chunk));
+    }
+    bytes_total += n;
+
+    for (uint32_t i = 0; i < n; ++i)
+    {
+      char c = (char)chunk[i];
+
+      if (c == '$')
+      {
+        len = 0;
+      }
+      if (c == '\r' || c == '\n')
+      {
+        if (len > 6u && line[0] == '$')
+        {
+          line[len] = '\0';
+          printf("  %s\r\n", line);
+          ++lines;
+          if (line[3] == 'R' && line[4] == 'M' && line[5] == 'C')      { ++n_rmc; }
+          else if (line[3] == 'G' && line[4] == 'G' && line[5] == 'A') { ++n_gga; }
+          else if (line[3] == 'G' && line[4] == 'S' && line[5] == 'A') { ++n_gsa; }
+          else if (line[3] == 'G' && line[4] == 'S' && line[5] == 'V') { ++n_gsv; }
+          else                                                          { ++n_other; }
+        }
+        len = 0;
+        continue;
+      }
+      if (len < GNSS_LINE_LEN - 1u)
+      {
+        line[len++] = c;
+      }
+    }
+    HAL_Delay(GNSS_POLL_GAP_MS);
+  }
+
+  printf("[GNSS-Dump] %lu Saetze: RMC=%lu GGA=%lu GSA=%lu GSV=%lu sonstige=%lu\r\n",
+         (unsigned long)lines, (unsigned long)n_rmc, (unsigned long)n_gga,
+         (unsigned long)n_gsa, (unsigned long)n_gsv, (unsigned long)n_other);
+
+  /* Datenrate mitprotokollieren: Wird die Leitungskapazitaet knapp, gehen
+   * Saetze verloren, sobald mehr Satelliten sichtbar werden (mehr GSV).
+   * Bei 115200 Baud (~11520 Byte/s) und gemessenen ~400 Byte/s ist davon
+   * weit und breit nichts zu sehen. */
+  if (gnss_source == GNSS_SRC_UART)
+  {
+    printf("[GNSS-Dump] %lu Byte in %lu ms = %lu Byte/s (UART %lu Baud "
+           "= max. %lu Byte/s)\r\n",
+           (unsigned long)bytes_total, (unsigned long)duration_ms,
+           (unsigned long)((bytes_total * 1000u) / (duration_ms ? duration_ms : 1u)),
+           (unsigned long)gnss_uart_baud, (unsigned long)(gnss_uart_baud / 10u));
+  }
+  else
+  {
+    printf("[GNSS-Dump] %lu Byte in %lu ms = %lu Byte/s (I2C)\r\n",
+           (unsigned long)bytes_total, (unsigned long)duration_ms,
+           (unsigned long)((bytes_total * 1000u) / (duration_ms ? duration_ms : 1u)));
+  }
+
+  if (gnss_rx_lost != 0u)
+  {
+    printf("[GNSS-Dump] ACHTUNG: %lu Byte im Ringpuffer verloren.\r\n",
+           (unsigned long)gnss_rx_lost);
+  }
+
+  if (n_rmc == 0u)
+  {
+    printf("[GNSS-Dump] KEIN RMC empfangen -- der Parser wertet nur RMC aus, "
+           "deshalb bleiben fix/lat/lon/v auf 0.\r\n");
+  }
+  return APP_STATUS_OK;
 }

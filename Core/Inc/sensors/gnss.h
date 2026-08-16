@@ -21,6 +21,10 @@ app_status_t gnss_read(gnss_data_t *data);
 /* Meldet, ob das GNSS-Modul initialisiert ist und Daten liefern kann. */
 bool gnss_is_ready(void);
 
+/* Meldet, ob aktuell eine gueltige Position vorliegt (RMC-Status 'A').
+ * Billig genug, um in jeder Schleifenrunde abgefragt zu werden. */
+bool gnss_has_fix(void);
+
 /* Sendet einen proprietaeren NMEA-Befehl an das Modul. Uebergeben wird nur
  * der Rumpf zwischen '$' und '*', z. B. "PSTMSETPAR,1303,0.2,0" fuer 5 Hz;
  * Pruefsumme und Zeilenende ergaenzt die Funktion selbst. */
@@ -35,6 +39,12 @@ app_status_t gnss_query_version(void);
  * Pins D0/D1): sucht die Baudrate des Moduls und fragt dort die
  * Firmware-Version ab. Blockiert mehrere Sekunden -- nur aus app_init(). */
 app_status_t gnss_uart_bringup(void);
+
+/* Diagnose: liest fuer die angegebene Dauer den rohen NMEA-Strom mit, gibt
+ * jede vollstaendige Zeile auf der Konsole aus und zaehlt am Ende die
+ * Satzarten. Blockiert entsprechend lange -- nur aus app_init() aufrufen,
+ * solange der Watchdog noch nicht scharf ist. */
+app_status_t gnss_dump_stream(uint32_t duration_ms);
 
 /* Liefert das zuletzt empfangene UTC-Datum und die UTC-Zeit (fuer die
  * Datei-Zeitstempel auf der microSD). false = noch kein Datum empfangen. */

@@ -31,6 +31,19 @@ PSS_V_PER_BAR = 0.028571
 PSS_FEHLER_MIN_V = 0.35
 PSS_FEHLER_MAX_V = 4.75
 
+# Nullpunkt je Fahrt und Kanal (siehe daten.nullpunkt_bar): Der PSS-140 ist
+# ein ABSOLUTdrucksensor und zeigt im Ruhezustand den Umgebungsluftdruck
+# (auf 600 m rund 0,94 bar). Dazu kommt seine Toleranz von +/-1 % vom
+# Endwert, bei 140 bar Messbereich also +/-1,4 bar -- gemessen wurden am
+# 16.08.2026 im Stand 1,1 bar vorne und 0,4 bar hinten. Ein fester Abzug
+# griffe zu kurz, deshalb wird der Ruhepegel aus den Daten geschaetzt.
+# Fenster fuer den gleitenden Median VOR der Perzentilbildung: eine halbe
+# Sekunde daempft das Einzelwandlungs-Rauschen (~ +/-1,7 bar), ist aber kurz
+# genug, dass eine Bremsung den Ruhepegel nicht anhebt.
+ABTASTRATE_HZ = 50.0
+NULLPUNKT_FENSTER_S = 0.5
+NULLPUNKT_PERZENTIL = 5.0
+
 # ------------------------------------------------------------------- GNSS
 # GNSS-Rauschen im Stand: unterhalb dieser Geschwindigkeit gilt "steht"
 # (empirisch ermittelt, siehe Protokoll_Inbetriebnahme.txt).

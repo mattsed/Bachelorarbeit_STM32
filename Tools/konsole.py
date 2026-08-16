@@ -57,10 +57,18 @@ def zusammenfassung(df: pd.DataFrame, gnss_stats: dict) -> None:
     for kanal in ("vorne", "hinten"):
         p = df[f"p_{kanal}_bar"]
         verworfen = int((~df[f"p_{kanal}_ok"]).sum())
-        hinweis = (f"{verworfen} Werte unplausibel verworfen (Kabelbruch?)"
-                   if verworfen else "ohne Sensor: nur Rauschen offener Pins")
-        print(f"Bremsdruck {kanal:<6} Mittel {p.mean():.1f} bar / max {p.max():.1f} bar "
-              f"({hinweis})")
+        # Nullpunkt mit ausgeben: Er wird je Fahrt und Kanal aus den Daten
+        # geschaetzt (siehe daten.nullpunkt_bar) und ist die wichtigste
+        # Groesse, um zwei Kanaele oder zwei Fahrten vergleichen zu koennen.
+        null = df.attrs.get(f"nullpunkt_{kanal}_bar")
+        teile = []
+        if null is not None:
+            teile.append(f"Nullpunkt {null:+.2f} bar")
+        if verworfen:
+            teile.append(f"{verworfen} Werte unplausibel verworfen (Kabelbruch?)")
+        hinweis = f" ({', '.join(teile)})" if teile else ""
+        print(f"Bremsdruck {kanal:<6} Mittel {p.mean():.1f} bar / max {p.max():.1f} bar"
+              f"{hinweis}")
 
 
 def drucke_ereignisse(ereignisse: pd.DataFrame) -> None:
