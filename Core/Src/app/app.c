@@ -222,6 +222,12 @@ app_status_t app_init(void)
    * Firmware-Version ab). */
   /* (void)gnss_uart_bringup(); */
   (void)brake_pressure_init();
+
+  /* Nach einem Watchdog-Reset waehrend der Fahrt darf die Gyro-Bias-Messung
+   * nicht laufen: Sie setzt Stillstand voraus und wuerde sonst echte Drehung
+   * als Nullpunktfehler festhalten. Nebeneffekt: Der Start verkuerzt sich um
+   * rund 2 s, die Datenluecke wird also kleiner. */
+  imu_lsm6dso_set_bias_calibration(!war_watchdog_reset);
   (void)imu_lsm6dso_init();
   (void)acc_adxl373_init();
   (void)storage_logger_init();
@@ -252,15 +258,19 @@ app_status_t app_init(void)
    * mehr stoppen.
    *
    * Es entsteht eine neue Logdatei mit fortlaufender Nummer; aus einer
-   * unterbrochenen Fahrt werden also zwei Dateien mit einer Luecke von rund
-   * einer Sekunde. Fuer die Auswertung ist das deutlich besser als ein
-   * Abbruch. */
+   * unterbrochenen Fahrt werden also zwei Dateien.
+   *
+   * DATENLUECKE rund 6 s: bis zu 4 s, bis der Watchdog den Stillstand
+   * bemerkt, plus rund 2 s fuer Reset und Initialisierung (gemessen am
+   * Board: 4,2 s bis "Bereit", davon 2,2 s Gyro-Bias-Messung, die hier
+   * entfaellt). Fuer die Auswertung ist das deutlich besser als ein
+   * Abbruch der gesamten Fahrt. */
   if (war_watchdog_reset && storage_logger_is_available())
   {
     if (storage_logger_start() == APP_STATUS_OK)
     {
       printf("[App] Aufzeichnung nach Watchdog-Reset selbsttaetig fortgesetzt "
-             "(neue Datei, Luecke von rund einer Sekunde).\r\n");
+             "(neue Datei, Luecke rund 6 s, kein Gyro-Bias).\r\n");
     }
     else
     {

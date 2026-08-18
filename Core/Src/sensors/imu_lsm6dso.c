@@ -65,6 +65,7 @@ static bool imu_lsm6dso_ready = false;
 
 static bool imu_bias_valid = false;
 static int16_t imu_gyro_bias[3] = { 0, 0, 0 };
+static bool imu_bias_calibration_enabled = true;
 
 
 static void imu_lsm6dso_cs(const board_interfaces_t *board, GPIO_PinState state)
@@ -151,6 +152,17 @@ app_status_t imu_lsm6dso_init(void)
          "Gyro 104 Hz / Tiefpass 19,0 Hz, +/-16 g, +/-2000 dps).\r\n");
   imu_lsm6dso_ready = true;
 
+  /* Nach einem Watchdog-Reset waehrend der Fahrt uebersprungen: Die Messung
+   * setzt Stillstand voraus, sonst landet echte Drehung im "Bias". Ohne
+   * gueltigen Bias entfaellt die Kopfzeile in der CSV, und die Auswertung
+   * erkennt daran, dass fuer diese Datei keiner vorliegt. */
+  if (!imu_bias_calibration_enabled)
+  {
+    printf("[LSM6DSO] Gyro-Bias nicht gemessen (Rad in Bewegung) -- "
+           "die Logdatei bekommt keine Bias-Kopfzeile.\r\n");
+    return APP_STATUS_OK;
+  }
+
   /* Gyro-Bias im Stand messen (~2 s): erste Samples verwerfen (Filter
    * schwingen ein), dann Mittelwert ueber alle drei Achsen bilden. */
   int32_t sum[3] = { 0, 0, 0 };
@@ -230,6 +242,11 @@ app_status_t imu_lsm6dso_read(imu_data_t *data)
 bool imu_lsm6dso_is_ready(void)
 {
   return imu_lsm6dso_ready;
+}
+
+void imu_lsm6dso_set_bias_calibration(bool enabled)
+{
+  imu_bias_calibration_enabled = enabled;
 }
 
 bool imu_lsm6dso_get_gyro_bias(int16_t *gx, int16_t *gy, int16_t *gz)

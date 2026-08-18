@@ -22,6 +22,18 @@ bool imu_lsm6dso_is_ready(void);
  * Rohwerten (LSB). Rueckgabe false, falls keine Kalibrierung vorliegt. */
 bool imu_lsm6dso_get_gyro_bias(int16_t *gx, int16_t *gy, int16_t *gz);
 
+/* Schaltet die Bias-Messung in imu_lsm6dso_init() ab. Muss VOR dem Init
+ * aufgerufen werden.
+ *
+ * WARUM: Die Messung mittelt rund 2 s lang die Drehraten und setzt dabei
+ * voraus, dass das Rad still steht. Nach einem Watchdog-Reset waehrend der
+ * Fahrt trifft das nicht zu -- die gemessene "Nullpunktabweichung" wuerde
+ * dann echte Drehung enthalten und in der Auswertung von allen Messwerten
+ * abgezogen. Ohne Messung bleibt der Bias ungueltig, die Kopfzeile
+ * "# gyro_bias" entfaellt, und die Auswertung weiss, dass fuer diese Datei
+ * kein Bias vorliegt. */
+void imu_lsm6dso_set_bias_calibration(bool enabled);
+
 #ifdef __cplusplus
 }
 #endif
