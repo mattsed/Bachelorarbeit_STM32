@@ -178,9 +178,13 @@ static void app_check_user_button(void)
 
 app_status_t app_init(void)
 {
-  /* Falls der letzte Neustart vom Watchdog kam, das deutlich melden --
-   * im Feld der wichtigste Hinweis darauf, dass die Firmware gehangen hat. */
-  if (__HAL_RCC_GET_FLAG(RCC_FLAG_IWDGRST))
+  /* Reset-Ursache auswerten, BEVOR die Flags geloescht werden. Der Watchdog
+   * setzt ein eigenes Flag, das sich von einem Druck auf RESET und vom
+   * Einschalten unterscheiden laesst -- und genau diese Unterscheidung
+   * entscheidet, ob die Aufzeichnung von selbst weiterlaufen soll. */
+  bool war_watchdog_reset = (__HAL_RCC_GET_FLAG(RCC_FLAG_IWDGRST) != 0u);
+
+  if (war_watchdog_reset)
   {
     printf("[App] ACHTUNG: Neustart wurde vom Watchdog ausgeloest (Firmware hing).\r\n");
   }
@@ -230,6 +234,39 @@ app_status_t app_init(void)
   else
   {
     printf("[App] Kein Logging moeglich (microSD nicht bereit) -- nur Sensor-Poll.\r\n");
+  }
+
+  /* Nach einem Watchdog-Reset die Aufzeichnung selbsttaetig fortsetzen.
+   *
+   * WARUM: Ein Watchdog-Reset ist ein vollstaendiger Neustart -- der RAM und
+   * damit der komplette Zustand sind weg, das Geraet landet im Bereit-
+   * Zustand und wartet auf B1. Waehrend einer Abfahrt drueckt den niemand.
+   * Ohne diesen Zweig endet die Messung an der Stelle, an der die Firmware
+   * gehangen hat, und man merkt es erst am PC. Der Watchdog soll das System
+   * ohne Zutun wieder flottmachen; wartet er danach auf einen Tastendruck,
+   * erfuellt er seinen Zweck nur halb.
+   *
+   * NUR beim Watchdog, nicht bei RESET oder Einschalten: Ein Druck auf
+   * RESET ist der vorgesehene Weg, eine Messung zu BEENDEN. Wuerde danach
+   * automatisch eine neue beginnen, liesse sich die Aufzeichnung gar nicht
+   * mehr stoppen.
+   *
+   * Es entsteht eine neue Logdatei mit fortlaufender Nummer; aus einer
+   * unterbrochenen Fahrt werden also zwei Dateien mit einer Luecke von rund
+   * einer Sekunde. Fuer die Auswertung ist das deutlich besser als ein
+   * Abbruch. */
+  if (war_watchdog_reset && storage_logger_is_available())
+  {
+    if (storage_logger_start() == APP_STATUS_OK)
+    {
+      printf("[App] Aufzeichnung nach Watchdog-Reset selbsttaetig fortgesetzt "
+             "(neue Datei, Luecke von rund einer Sekunde).\r\n");
+    }
+    else
+    {
+      printf("[App] Fortsetzen nach Watchdog-Reset fehlgeschlagen -- "
+             "Aufzeichnung mit B1 starten.\r\n");
+    }
   }
 
   /* Watchdog bewusst erst NACH allen Modul-Inits scharf schalten:
