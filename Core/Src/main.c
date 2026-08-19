@@ -272,8 +272,17 @@ static void MX_ADC1_Init(void)
 
   /** Configure Regular Channel
   */
+  /* DIAGNOSE 19.08.2026 -- Raenge vertauscht (war: PA0 Rang 1, PA3 Rang 2).
+   * PA0 rauscht siebenfach staerker als PA3. Der Tausch der Sensorleitungen
+   * hat gezeigt, dass es nicht am Sensor liegt; offen ist, ob es am Pin PA0
+   * haengt oder an der ERSTEN Wandlung nach jedem HAL_ADC_Start(). Wandert
+   * das Rauschen mit diesem Tausch auf PA3, ist es die Reihenfolge.
+   * brake_adc_scan() ist passend dazu umgestellt, damit p_vorne weiterhin
+   * PA0 meint. ZURUECKBAUEN, sobald die Frage beantwortet ist.
+   * ACHTUNG: Diese Zeilen liegen ausserhalb der USER-CODE-Bereiche und gehen
+   * bei einer CubeMX-Regenerierung verloren. */
   sConfig.Channel = ADC_CHANNEL_0;
-  sConfig.Rank = ADC_REGULAR_RANK_1;
+  sConfig.Rank = ADC_REGULAR_RANK_2;
   sConfig.SamplingTime = ADC_SAMPLETIME_92CYCLES_5;
   sConfig.SingleDiff = ADC_SINGLE_ENDED;
   sConfig.OffsetNumber = ADC_OFFSET_NONE;
@@ -286,7 +295,7 @@ static void MX_ADC1_Init(void)
   /** Configure Regular Channel
   */
   sConfig.Channel = ADC_CHANNEL_15;
-  sConfig.Rank = ADC_REGULAR_RANK_2;
+  sConfig.Rank = ADC_REGULAR_RANK_1;
   if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
   {
     Error_Handler();

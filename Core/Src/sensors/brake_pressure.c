@@ -95,13 +95,18 @@ static app_status_t brake_adc_scan(ADC_HandleTypeDef *adc, uint16_t *front, uint
     (void)HAL_ADC_Stop(adc);
     return APP_STATUS_ERROR;
   }
-  *front = (uint16_t)HAL_ADC_GetValue(adc);
+  /* DIAGNOSE 19.08.2026: In main.c sind die Raenge vertauscht -- PA3
+   * (hinten) wird jetzt ZUERST gewandelt, PA0 (vorne) als zweites. Die
+   * Zuordnung hier folgt dem, damit p_vorne weiterhin PA0 meint und der
+   * Vergleich mit den bisherigen Messungen gueltig bleibt. Beim Ruecktausch
+   * in main.c muessen auch diese beiden Zeilen zurueck. */
+  *back = (uint16_t)HAL_ADC_GetValue(adc);
   if (HAL_ADC_PollForConversion(adc, 10) != HAL_OK)
   {
     (void)HAL_ADC_Stop(adc);
     return APP_STATUS_ERROR;
   }
-  *back = (uint16_t)HAL_ADC_GetValue(adc);
+  *front = (uint16_t)HAL_ADC_GetValue(adc);
   (void)HAL_ADC_Stop(adc);
   return APP_STATUS_OK;
 }
