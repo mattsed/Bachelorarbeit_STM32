@@ -74,10 +74,15 @@ static bool gnss_ready = false;
  * (380 -> 111 kHz). UART kennt diese Fehlerklasse nicht: kein Adressabgleich,
  * keine Slave-Zustandsmaschine, nichts, was sich verklemmen koennte.
  *
- * HARDWARE: Auf dem X-NUCLEO-LIV4A1 ist R3 in der Leitung Modul-TX ->
- * Arduino-Header unbestueckt (am Board bestaetigt). Der UART-Weg
- * funktioniert erst mit einer Bruecke von TP1 (direkt am Modulpin
- * UART-TX) auf Arduino-Pin D0 = PB7.
+ * HARDWARE: Auf dem X-NUCLEO-LIV4A1 liegt der Sendeausgang des Moduls in der
+ * Werkseinstellung auf Arduino-Pin D2. Die Belegung auf D0 = PB7, wo LPUART1
+ * RX liegt, ist eine wahlweise Beschaltung und wird ueber die Steckbruecke
+ * J11 ausgewaehlt (UM3296, Tabelle 5). Steht J11 nicht auf 1-2, kommt am
+ * UART kein Signal an.
+ *
+ * (Frueher stand hier, R3 in dieser Leitung sei unbestueckt und es brauche
+ * eine Bruecke von TP1 auf D0. Beides ist falsch: R3 ist laut Stueckliste
+ * mit 10k bestueckt, und einen Testpunkt TP1 gibt es auf dem Board nicht.)
  */
 typedef enum {
   GNSS_SRC_NONE = 0,
@@ -980,7 +985,7 @@ static bool gnss_uart_detect(void)
   }
 
   HAL_NVIC_DisableIRQ(LPUART1_IRQn);
-  printf("[GNSS] kein NMEA auf UART (Bruecke TP1 -> D0 gelegt?) -- "
+  printf("[GNSS] kein NMEA auf UART (Steckbruecke J11 auf 1-2?) -- "
          "falle auf I2C zurueck.\r\n");
   return false;
 }
@@ -995,7 +1000,7 @@ app_status_t gnss_init(void)
   gnss_source = GNSS_SRC_NONE;
 
   /* Schritt 0: UART bevorzugen -- siehe Begruendung oben bei gnss_source_t.
-   * Nur wenn dort nichts ankommt (Bruecke TP1 -> D0 fehlt), wird der
+   * Nur wenn dort nichts ankommt (Steckbruecke J11 nicht auf 1-2), wird der
    * bisherige I2C-Weg genommen. */
   if (gnss_uart_detect())
   {
