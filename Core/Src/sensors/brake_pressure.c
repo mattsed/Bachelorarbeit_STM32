@@ -16,6 +16,22 @@
 #define BRAKE_SENSOR_V_PER_BAR 0.028571f
 #define BRAKE_AVG_SAMPLES     8u
 
+/* Mittelung im Messtakt. Bis 19.08.2026 lieferte brake_pressure_read() eine
+ * einzelne Wandlung; die 8-fach-Mittelung lief nur einmal beim Start fuer
+ * die Diagnoseausgabe. Der Kanal PA0 traegt eine hochfrequente Stoerung
+ * (Protokolleintrag 19.08.2026: Ursache liegt an der Hardware am Pin,
+ * Sensor und Wandlungsreihenfolge wurden per Kreuztest ausgeschlossen).
+ * Eine Einzelmessung streute dort mit 37 Zaehlschritten = 1,5 bar und
+ * ueberschritt damit die Bremsschwelle von 2 bar -- in LOG_045 haben
+ * dadurch 2 der 17 Bremsereignisse ausgeloest, die keine waren.
+ *
+ * 16 Wandlungen daempfen unkorreliertes Rauschen theoretisch um den Faktor
+ * 4 (37 -> 9 Zaehlschritte = 0,38 bar). Da die Stoerung periodisch ist und
+ * die Scans nur Mikrosekunden auseinanderliegen, kann der reale Gewinn
+ * kleiner ausfallen. Zeitbedarf rund 0,2..0,8 ms von 20 ms Messtakt.
+ * Das behebt die Ursache nicht, es daempft nur die Wirkung. */
+#define BRAKE_READ_SAMPLES    16u
+
 /* Kabelbruch-/Fehlererkennung: Der PSS-140 liefert im gesunden Betrieb
  * immer 0,5..4,725 V (10..90 % der Versorgung, ratiometrisch). Spannungen
  * deutlich darunter bedeuten: Signalleitung ab oder Versorgung fehlt
@@ -163,16 +179,30 @@ app_status_t brake_pressure_init(void)
 app_status_t brake_pressure_read(brake_pressure_data_t *data)
 {
   const board_interfaces_t *board = board_get_interfaces();
+  uint32_t sum_front = 0;
+  uint32_t sum_back = 0;
 
   if (!brake_pressure_ready || data == NULL)
   {
     return APP_STATUS_NOT_READY;
   }
 
-  if (brake_adc_scan(board->brake_adc, &data->front_raw, &data->back_raw) != APP_STATUS_OK)
+  /* Siehe BRAKE_READ_SAMPLES: mehrfach wandeln und mitteln, weil eine
+   * Einzelmessung auf PA0 ueber der Bremsschwelle rauscht. */
+  for (uint32_t i = 0; i < BRAKE_READ_SAMPLES; ++i)
   {
-    return APP_STATUS_ERROR;
+    uint16_t front = 0;
+    uint16_t back = 0;
+    if (brake_adc_scan(board->brake_adc, &front, &back) != APP_STATUS_OK)
+    {
+      return APP_STATUS_ERROR;
+    }
+    sum_front += front;
+    sum_back += back;
   }
+  data->front_raw = (uint16_t)(sum_front / BRAKE_READ_SAMPLES);
+  data->back_raw = (uint16_t)(sum_back / BRAKE_READ_SAMPLES);
+
   float u_front = 0.0f;
   float u_back = 0.0f;
   data->front_bar = brake_raw_to_bar(data->front_raw, &u_front);
