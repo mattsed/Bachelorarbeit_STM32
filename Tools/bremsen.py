@@ -54,8 +54,14 @@ def bremsereignisse(df: pd.DataFrame) -> pd.DataFrame:
         if dauer < BREMS_MIN_DAUER_S:
             continue
         seg = df.iloc[s:e + 1]
-        v_vor = float(seg["v_km_h"].iloc[0])
-        v_nach = float(seg["v_km_h"].iloc[-1])
+        # Fusionierte Geschwindigkeit bevorzugen: Ein Bremsvorgang ist
+        # kuerzer als der GNSS-Takt von 1 s, der Rohwert waere zwischen
+        # zwei Stuetzstellen nur interpoliert. Rueckhaltetest an LOG_045:
+        # 3,86 km/h RMS mit Fusion gegen 4,75 km/h ohne (siehe
+        # KALMAN_SIGMA_A_M_S2 in konstanten.py).
+        v_spalte = "v_fusion_kmh" if "v_fusion_kmh" in seg.columns else "v_km_h"
+        v_vor = float(seg[v_spalte].iloc[0])
+        v_nach = float(seg[v_spalte].iloc[-1])
         zeilen.append({
             "start_s": float(t[s]),
             "dauer_s": float(dauer),

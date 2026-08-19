@@ -39,7 +39,7 @@ import numpy as np
 import pandas as pd
 
 from konstanten import (
-    MADGWICK_BETA, FAHRT_ACHSE, FAHRT_VORZEICHEN,
+    MADGWICK_BETA, FAHRT_ACHSE, FAHRT_VORZEICHEN, FAHRT_SKALIERUNG,
     KALMAN_SIGMA_A_M_S2, KALMAN_SIGMA_GNSS_M_S, G_M_S2,
 )
 
@@ -157,12 +157,15 @@ def lagefilter(df: pd.DataFrame, beta: float = MADGWICK_BETA) -> pd.DataFrame:
         df[f"a_lin_{name}_ms2"] = a_lin[:, spalte] * G_M_S2
 
     achse = {"x": 0, "y": 1, "z": 2}[FAHRT_ACHSE]
-    df["a_laengs_ms2"] = FAHRT_VORZEICHEN * a_lin[:, achse] * G_M_S2
+    # FAHRT_SKALIERUNG gleicht die Einbaulage aus: Die Achse sieht nur
+    # einen Teil der wahren Laengsbeschleunigung (Pitch rund -62 Grad).
+    df["a_laengs_ms2"] = (FAHRT_VORZEICHEN * FAHRT_SKALIERUNG
+                          * a_lin[:, achse] * G_M_S2)
 
     print(f"Fusion Lage:       Roll {roll.mean():+.1f} deg / "
           f"Pitch {pitch.mean():+.1f} deg im Mittel, "
           f"a_laengs {df['a_laengs_ms2'].abs().max():.2f} m/s^2 max "
-          f"(Achse {FAHRT_ACHSE}, unkalibriert)")
+          f"(Achse {FAHRT_ACHSE}, Massstab {FAHRT_SKALIERUNG:.2f})")
     return df
 
 

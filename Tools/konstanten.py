@@ -72,11 +72,24 @@ BREMS_MIN_DAUER_S = 0.2
 MADGWICK_BETA = 0.05
 
 # Welche IMU-Achse in Fahrtrichtung zeigt und mit welchem Vorzeichen
-# (+1 = positive Achsrichtung nach vorn). TODO: erst mit einer echten
-# Fahrmessung kalibrierbar -- beim Anfahren muss die neigungsbereinigte
-# Laengsbeschleunigung positiv werden, beim Bremsen negativ.
+# (+1 = positive Achsrichtung nach vorn).
+#
+# Kalibriert am 19.08.2026 mit LOG_045 (253 s, 130 auswertbare Intervalle,
+# kalibrierung.py): Achse x, r = +0,802. Die Achsen x und z korrelieren fast
+# gleich stark (0,802 gegen -0,800), x sagt die GNSS-Referenz aber besser
+# vorher -- Restfehler 0,64 gegen 0,76 m/s^2. Eine gemeinsame Projektion
+# aller drei Achsen bringt nur 0,63 m/s^2, eine Achse genuegt also.
 FAHRT_ACHSE = "x"
 FAHRT_VORZEICHEN = +1.0
+
+# Massstab fuer die Einbaulage. Das Board liegt flach am Unterrohr, der
+# Lagefilter meldet im Mittel Pitch -62,5 Grad. Die Fahrtrichtungsachse
+# sieht davon nur cos(62,5 Grad) = 0,46 der wahren Laengsbeschleunigung.
+# Der Wert stammt nicht aus dieser Geometrie, sondern aus der Regression
+# gegen die GNSS-Referenz (Steigung 2,50) -- er faengt damit auch eine
+# Restverdrehung und einen Rest an nicht herausgerechneter Schwerkraft mit
+# ab. Ohne diesen Faktor waere a_laengs dauerhaft rund 60 % zu klein.
+FAHRT_SKALIERUNG = 2.50
 
 # Geschwindigkeits-Kalman (1D): Prozessrauschen beschreibt, wie stark die
 # per IMU praedizierte Geschwindigkeit pro Schritt vom wahren Wert
@@ -85,11 +98,28 @@ FAHRT_VORZEICHEN = +1.0
 # Rauschen, siehe STILLSTAND_SCHWELLE_M_S). Das Verhaeltnis der beiden
 # bestimmt das Kalman-Gain, also wie stark jedes GNSS-Update die
 # IMU-Praediktion zurueckzieht.
-# TODO Solange FAHRT_ACHSE unkalibriert ist, ist die IMU-Praediktion wenig
-# vertrauenswuerdig -> Prozessrauschen bewusst gross (2,5), damit das GNSS
-# dominiert. Nach der Achskalibrierung mit einer echten Fahrmessung kann
-# der Wert Richtung ~0,5..1,0 gesenkt werden (IMU bekommt mehr Gewicht,
-# Profil zwischen den GNSS-Stuetzstellen wird informativer).
+# BLEIBT bei 2,5 -- die urspruengliche Erwartung, den Wert nach der
+# Achskalibrierung auf 0,5..1,0 senken zu koennen, ist widerlegt.
+#
+# Geprueft an LOG_045 mit Rueckhaltetest: jedes zweite GNSS-Update wurde dem
+# Filter vorenthalten, sodass er 2 s allein mit der IMU ueberbruecken muss,
+# und gegen die zurueckgehaltenen Werte geprueft (126 Pruefpunkte). Das
+# vermeidet den Zirkelschluss, die Fusion an genau den Stuetzstellen zu
+# bewerten, die sie selbst einarbeitet.
+#
+#   ohne IMU (letzten GNSS-Wert halten)   4,75 km/h RMS
+#   sigma_a = 0,65                        6,81
+#   sigma_a = 2,5                         3,86
+#   sigma_a = 10                          3,12
+#
+# Die IMU verbessert das Ergebnis also deutlich, aber nur bei grossem
+# Prozessrauschen: Ihr Verlauf zwischen den Stuetzstellen ist brauchbar, ihr
+# absoluter Pegel driftet. Ein fester Bias erklaert das nicht vollstaendig
+# (abgezogen bleiben bei sigma_a = 0,65 immer noch 5,35 km/h) -- der Fehler
+# ist zeitveraenderlich. Sauber waere, den Bias als zweiten Filterzustand
+# mitzuschaetzen statt ihn ueber ein aufgeblaehtes Prozessrauschen
+# abzufangen; 10 statt 2,5 brachte nur 0,7 km/h und waere als
+# "Beschleunigungsfehler von 1 g" nicht mehr physikalisch begruendbar.
 KALMAN_SIGMA_A_M_S2 = 2.5       # Standardabw. des Beschleunigungsfehlers
 KALMAN_SIGMA_GNSS_M_S = 0.5     # Standardabw. der GNSS-Geschwindigkeit
 G_M_S2 = 9.81                   # Erdbeschleunigung fuer g -> m/s^2
