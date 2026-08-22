@@ -105,18 +105,6 @@ Höhenlage und der Offsetfehler des Sensors gemeinsam heraus.
 
 ## Auswertung
 
-```bash
-cd Tools
-pip install numpy pandas matplotlib scipy
-pip install plotly folium branca      # optional, für den HTML-Report
-
-python auswertung.py ../../Messungen/LOG_047.CSV
-```
-
-Erzeugt eine Zusammenfassung auf der Konsole, eine Tabelle der erkannten
-Bremsereignisse, Zeitverlaufsdiagramme, die GNSS-Spur als Karte sowie einen
-interaktiven HTML-Report.
-
 | Modul | Aufgabe |
 |---|---|
 | `konstanten.py` | alle Umrechnungsfaktoren und Schwellwerte |
