@@ -1,0 +1,30 @@
+cff-version: 1.2.0
+message: "Wenn Sie diese Software verwenden, zitieren Sie sie bitte wie folgt."
+title: "Datenlogger zur Bremsanalyse am Mountainbike: Firmware und Auswertesoftware"
+abstract: >-
+  Firmware fuer einen STM32H563ZI und zugehoerige Auswertesoftware in Python
+  fuer einen Datenlogger, der Bremsdruck an beiden Bremsen, Beschleunigung und
+  Drehrate einer IMU, Stossbeschleunigungen bis 400 g sowie Position und
+  Geschwindigkeit ueber GNSS auf einer gemeinsamen Zeitbasis mit 50 Hz
+  aufzeichnet. Entstanden im Rahmen einer Bachelorarbeit am MCI Innsbruck.
+type: software
+authors:
+  - family-names: Sedlaczek
+    given-names: Matteo
+    affiliation: "MCI | Die Unternehmerische Hochschule, Innsbruck"
+    email: sm4377@mci4me.at
+    # orcid: "https://orcid.org/0000-0000-0000-0000"   # eintragen, falls vorhanden
+license: MIT
+repository-code: "https://github.com/mattsed/Bachelorarbeit_STM32"
+keywords:
+  - Mountainbike
+  - Bremsdruck
+  - Datenlogger
+  - eingebettete Systeme
+  - STM32
+  - GNSS
+  - inertiale Messeinheit
+  - Sensorfusion
+version: "1.0.0"
+date-released: "2026-09-11"
+# doi: "10.5281/zenodo.XXXXXXX"   # nach dem ersten Zenodo-Release eintragen
