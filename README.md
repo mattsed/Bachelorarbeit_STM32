@@ -31,9 +31,6 @@ Schreibzugriff auf die Karte das Auslesen der Sensoren nicht blockiert.
 Die PSS-140 liefern 0,5–4,5 V bei 5 V Versorgung. Ein Spannungsteiler aus
 15 kΩ und 33 kΩ bringt das auf den 3,3-V-Bereich des Analog-Digital-Umsetzers.
 
-**Wichtig:** Auf dem GNSS-Shield muss die Steckbrücke **J11 auf 1–2** stehen,
-damit der Modul-TX auf D0 (PB7) liegt. Die Werkseinstellung 2–3 legt ihn auf
-D2, wo ihn die Firmware nicht sieht.
 
 ## Aufbau des Repositorys
 
@@ -51,21 +48,7 @@ Tools/                  Auswertung in Python
 Der Rest (`.ioc`, `.cproject`, Linker-Skripte, `Debug/`) stammt aus
 STM32CubeIDE beziehungsweise dem Build.
 
-## Firmware bauen und flashen
 
-Der übliche Weg ist STM32CubeIDE: Projekt importieren, Debug-Build starten,
-über den ST-LINK des Nucleo-Boards flashen.
-
-Ohne grafische Oberfläche geht es auch über die Kommandozeile:
-
-```bash
-# Bauen
-cd Debug
-make -j8
-
-# Flashen
-STM32_Programmer_CLI -c port=SWD -w Bachelorarbeit.elf -rst
-```
 
 Die Konsolenausgabe der Firmware liegt auf dem virtuellen COM-Port des
 ST-LINK, 115200 Baud 8N1.
@@ -80,8 +63,7 @@ ST-LINK, 115200 Baud 8N1.
 3. **B1 (blauer Knopf)** startet die Aufzeichnung. Es wird eine neue Datei
    `LOG_nnn.CSV` angelegt.
 4. **RESET (schwarzer Knopf)** beendet die Aufzeichnung und bootet zurück in
-   den Bereit-Zustand. Während der Aufzeichnung ist B1 wirkungslos, damit am
-   Lenker nicht versehentlich gestoppt wird.
+   den Bereit-Zustand.
 
 Ein Watchdog setzt das System nach rund 4 s ohne Lebenszeichen zurück.
 
@@ -155,31 +137,6 @@ Sensorachse zeigt in Fahrtrichtung. `kalibrierung.py` bestimmt aus einer Fahrt
 mit wiederholtem Beschleunigen und Bremsen auf ebener Strecke, welche Achse am
 besten mit der GNSS-Beschleunigung übereinstimmt, und liefert Vorzeichen und
 Maßstab. Die Werte werden in `konstanten.py` eingetragen.
-
-## Bekannte Einschränkungen
-
-- **Störung auf PA0.** Der vordere Bremsdruckkanal rauscht rund siebenmal
-  stärker als der hintere, im Ruhezustand etwa 1,6 bar gegenüber 0,2 bar.
-  Kreuztests mit vertauschten Sensorleitungen und vertauschter
-  Wandlungsreihenfolge schließen Sensor, Kabel und Firmware aus; die Ursache
-  liegt an der Beschaltung des Eingangs, die konkrete Fehlerstelle wurde nicht
-  gefunden. Einzelne Bremsereignisse werden dadurch fälschlich erkannt.
-- **Kein Anti-Aliasing-Filter im Bremsdruckpfad.** Für die IMU sind die
-  internen Filter auf rund 20 Hz gesetzt; der Analogpfad tastet ungefiltert
-  mit 50 Hz ab.
-- **Der 400-g-Kanal wird unterabgetastet.** Die kleinste Ausgabedatenrate des
-  ADXL373 liegt bei 400 Hz. Seine Werte sind als Hinweis auf Auftreten und
-  Größenordnung von Stößen zu lesen, nicht als abgetasteter Signalverlauf.
-- **Startverhalten.** Die ersten 20 bis 25 Zeilen jeder Aufzeichnung liegen
-  nicht auf dem 20-ms-Raster. Ursache ungeklärt, betrifft weniger als die
-  erste halbe Sekunde.
-- **Nutzen der Geschwindigkeitsfusion ist fahrtabhängig.** Bei kräftigen
-  Geschwindigkeitswechseln verbessert die Trägheitssensorik die Schätzung
-  zwischen zwei Positionsupdates, bei gleichmäßiger Fahrt verschlechtert sie
-  sie gegenüber dem Halten des letzten GNSS-Werts.
-- **Kein Funk.** Eine BLE-Anbindung war ursprünglich vorgesehen und wurde
-  verworfen; die anfallende Datenrate übersteigt den praktisch erreichbaren
-  Durchsatz. Im Ordner `Debug/` können noch Artefakte davon liegen.
 
 ## Lizenz
 
